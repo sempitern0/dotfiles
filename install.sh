@@ -79,7 +79,7 @@ detect_package_manager() {
         INSTALL_CMD="pacman -S --noconfirm"
         UPDATE_CMD="pacman -Sy"
         UPGRADE_CMD="pacman -Su --noconfirm"
-        CLEANUP_CMD="pacman -Sc --noconfirm" 
+        CLEANUP_CMD="pacman -Sc --noconfirm"
     elif command -v dnf &> /dev/null; then
         PACKAGE_MANAGER="dnf"
         INSTALL_CMD="dnf install -y"
@@ -91,7 +91,7 @@ detect_package_manager() {
         INSTALL_CMD="zypper install -y"
         UPDATE_CMD="zypper refresh"
         UPGRADE_CMD="zypper update -y"
-        CLEANUP_CMD="zypper clean -a" 
+        CLEANUP_CMD="zypper clean -a"
     else
         msg_error "Could not find a supported package manager (APT, Pacman, DNF, Zypper)."
         exit 1
@@ -107,9 +107,9 @@ install_packages() {
     fi
 
     local packages=("$@")
-    
+
     msg_info "Installing selected packages: ${purpleColour}${packages[*]}${endColour}..."
-    
+
     if eval "sudo $INSTALL_CMD ${packages[*]}" &> /dev/null; then
         msg_success "Packages installed with success!: ${packages[*]}"
     else
@@ -118,9 +118,49 @@ install_packages() {
     fi
 }
 
+configure_bash_files() {
+    msg_info "Configuring Bash dotfiles..."
+
+    local target_user="${SUDO_USER:-$USER}"
+    local target_home
+    target_home=$(getent passwd "$target_user" | cut -d: -f6)
+
+    local source_dir="$CURRENT_DIR/bash"
+
+    if [ ! -d "$source_dir" ]; then
+        msg_error "Source directory '$source_dir' not found in the repository."
+        return 1
+    fi
+
+    local files=(".bashrc" ".bash.aliases")
+
+    for file in "${files[@]}"; do
+        local src="$source_dir/$file"
+        local dest="$target_home/$file"
+
+        if [ -f "$src" ]; then
+
+            if [ -f "$dest" ]; then
+                msg_info "Backing up existing $file to $file.bak"
+                cp "$dest" "$dest.bak"
+            fi
+
+            msg_info "Copying $file to $target_home..."
+            cp "$src" "$dest"
+
+            chown "$target_user:$target_user" "$dest"
+            [ -f "$dest.bak" ] && chown "$target_user:$target_user" "$dest.bak"
+        else
+            msg_warn "File '$file' not found in '$source_dir', skipping."
+        fi
+    done
+
+    msg_success "Bash dotfiles successfully configured for user $target_user!"
+}
+
 main() {
     if [[ $(uname -s) != "Linux" ]]; then
-        msg_error "This script it's only compatible for linux distributions."
+        msg_error "This script it's only compatible for Linux distributions."
         exit 1
     fi
 
@@ -128,15 +168,14 @@ main() {
     print_separator
     echo -e "${cyanColour}Preparing the environment...${endColour}"
     print_separator
-   
-    detect_package_manager    
-    print_separator 
+
+    detect_package_manager
     update_system
-    print_separator 
-    install_packages tree xclip htop iftop
-    
     print_separator
-    
+    install_packages tree xclip htop iftop feh bat kitty
+    print_separator
+    configure_bash_files
+
     msg_success "The environment is ready to use, enjoy!"
 }
 
