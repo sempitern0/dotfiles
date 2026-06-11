@@ -172,9 +172,16 @@ main() {
     detect_package_manager
     update_system
     print_separator
-    install_packages tree xclip htop iftop feh bat kitty
+    install_packages software-properties-common ca-certificates tree xclip htop iftop feh bat kitty
     print_separator
     configure_bash_files
+
+
+    if command -v batcat &> /dev/null; then
+        if [ ! -f "$HOME/.local/bin/bat" ]; then
+            msg_info "Creating symlink for 'bat' command..."
+            mkdir -p "$HOME/.local/bin"
+            ln -s /usr/bin/batcat "$HOME/.local/bin/bat"
 
     msg_success "The environment is ready to use, enjoy!"
 }
