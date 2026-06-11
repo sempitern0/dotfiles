@@ -1,0 +1,50 @@
+alias da='date "+%Y-%m-%d %A %T %Z"'
+alias ll='ls -alF'
+alias la='ls -A'
+alias l='ls -CF'
+alias lt='ls --human-readable --size -1 -S --classify'
+alias mkdir='mkdir -pv'
+alias path='echo -e ${PATH//:/\\n}'
+
+# Batcat it's an external package that needs to be installed
+alias bat='batcat'
+
+# Add an "alert" alias for long running commands.  Use like so:
+#   sleep 10; alert
+alias alert='notify-send --urgency=low -i "$([ $? = 0 ] && echo terminal || echo error)" "$(history|tail -n1|sed -e '\''s/^\s*[0-9]\+\s*//;s/[;&|]\s*alert$//'\'')"'
+
+# Hardware and networking utilities
+alias topcpu="/bin/ps -eo pcpu,pid,user,args | sort -k 1 -r | head -10"
+alias openports='netstat -nape --inet'
+alias ports='netstat -tulanp'
+alias listen='ss -tulnp'
+alias netcon="ss -ntu | awk '{print \$5}' | cut -d: -f1 | sort | uniq -c | sort -nr"
+alias myip="curl -s https://ifconfig.me; echo '' && ip -br -4 addr"
+alias curltime='curl -o /dev/null -s -w "Connect: %{time_connect}s\nTTFB: %{time_starttransfer}s\nTotal: %{time_total}s\nStatus: %{http_code}\n"'
+
+alias diskspace="du -S | sort -n -r |more"
+alias folders='du -h --max-depth=1'
+alias folderssort='find . -maxdepth 1 -type d -print0 | xargs -0 du -sk | sort -rn'
+alias cpuinfo="less /proc/cpuinfo"
+alias dropcache='sudo sync; echo 3 | sudo tee /proc/sys/vm/drop_caches'
+alias failed='systemctl --failed'
+
+## Tree is an external package that needs to be installed
+alias tree='tree -CAhF --dirsfirst'
+alias treed='tree -CAFd'
+alias mountedinfo='df -hT'
+alias mnt="mount | awk -F' ' '{ printf \"%s\t%s\n\",\$1,\$3; }' | column -t | egrep ^/dev/ | sort"
+alias usage='du -ch | grep total'
+alias totalusage='df -hl --total | grep total'
+
+alias logs="sudo find /var/log -type f -exec file {} \; | grep 'text' | cut -d' ' -f1 | sed -e's/:$//g' | grep -v '[0-9]$' | xargs tail -f"
+
+alias count='find . -type f | wc -l'
+alias cpv='rsync -ah --info=progress2'
+alias sudo='sudo '
+alias update='sudo apt-get update && sudo apt-get upgrade'
+
+alias cachefonts='fc-cache -f -v'
+alias icat='kitty +kitten icat'
+alias purgepkg='sudo apt autoremove --purge'
+alias shredd='shred -uzv -n 10'
