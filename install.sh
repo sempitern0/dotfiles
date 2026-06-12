@@ -179,7 +179,7 @@ main() {
     detect_package_manager
     update_system
     print_separator
-    install_packages curl wget git software-properties-common ca-certificates tree xclip htop iftop feh bat kitty
+    install_packages curl wget git software-properties-common ca-certificates tree xclip htop iftop feh bat kitty lynis chkrootkit
     print_separator
     configure_bash_files
 

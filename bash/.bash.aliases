@@ -1,10 +1,12 @@
 alias da='date "+%Y-%m-%d %A %T %Z"'
-alias ll='ls -alF'
-alias la='ls -A'
+alias ll='ls -lahF'
+alias la='ls -'
 alias l='ls -CF'
 alias lt='ls --human-readable --size -1 -S --classify'
 alias mkdir='mkdir -pv'
+alias mktemp='mktemp -dv'
 alias path='echo -e ${PATH//:/\\n}'
+alias +x='chmod +x'
 
 # Batcat it's an external package that needs to be installed
 alias bat='batcat'
