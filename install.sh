@@ -41,13 +41,12 @@ print_separator() {
 }
 ### END DISPLAY INFORMATION FUNCTIONS ###
 
-
 update_system() {
-    msg_info "Updating package lists..."
-    if ! eval "sudo $UPDATE_CMD" &> /dev/null; then
-        msg_error "Failed to update package repositories."
-        return 1
-    fi
+  msg_info "Updating package lists..."
+  if ! eval "sudo $UPDATE_CMD" > /tmp/pkg_update.log 2>&1; then
+    msg_error "Failed to update. Check /tmp/pkg_update.log for details."
+    return 1
+  fi
 
     msg_info "Upgrading system packages (this might take a while)..."
     if ! eval "sudo $UPGRADE_CMD" &> /dev/null; then
@@ -92,8 +91,14 @@ detect_package_manager() {
         UPDATE_CMD="zypper refresh"
         UPGRADE_CMD="zypper update -y"
         CLEANUP_CMD="zypper clean -a"
+    elif command -v nix &> /dev/null; then
+        PACKAGE_MANAGER="nix"
+        INSTALL_CMD="nix-env -iA"
+        UPDATE_CMD="nix-channel --update"
+        UPGRADE_CMD="nix-env -u"
+        CLEANUP_CMD="nix-collect-garbage -d"
     else
-        msg_error "Could not find a supported package manager (APT, Pacman, DNF, Zypper)."
+        msg_error "Could not find a supported package manager (APT, Pacman, DNF, Zypper, NYX)."
         exit 1
     fi
 
@@ -107,10 +112,12 @@ install_packages() {
     fi
 
     local packages=("$@")
+    local cmd_prefix="sudo"
+    [[ "$PACKAGE_MANAGER" == "nix" ]] && cmd_prefix=""
 
     msg_info "Installing selected packages: ${purpleColour}${packages[*]}${endColour}..."
 
-    if eval "sudo $INSTALL_CMD ${packages[*]}" &> /dev/null; then
+    if eval "$cmd_prefix $INSTALL_CMD ${packages[*]}" &> /dev/null; then
         msg_success "Packages installed with success!: ${packages[*]}"
     else
         msg_error "Installation failed for one or more packages: ${packages[*]}"
@@ -172,16 +179,18 @@ main() {
     detect_package_manager
     update_system
     print_separator
-    install_packages software-properties-common ca-certificates tree xclip htop iftop feh bat kitty
+    install_packages curl wget git software-properties-common ca-certificates tree xclip htop iftop feh bat kitty
     print_separator
     configure_bash_files
 
-
+  ## PREPARE BATCAT SYMLINK
     if command -v batcat &> /dev/null; then
         if [ ! -f "$HOME/.local/bin/bat" ]; then
             msg_info "Creating symlink for 'bat' command..."
             mkdir -p "$HOME/.local/bin"
             ln -s /usr/bin/batcat "$HOME/.local/bin/bat"
+       fi
+    fi
 
     msg_success "The environment is ready to use, enjoy!"
 }
