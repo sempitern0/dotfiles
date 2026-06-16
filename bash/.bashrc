@@ -38,6 +38,7 @@ export LESS_TERMCAP_so=$'\E[01;44;33m'
 export LESS_TERMCAP_ue=$'\E[0m'
 export LESS_TERMCAP_us=$'\E[01;32m'
 export MANPAGER="less -R --use-color -Dd+r -Du+g"
+export MAN_KEEP_FORMATTING=1
 
 # append to the history file, don't overwrite it
 shopt -s checkwinsize
