@@ -195,3 +195,9 @@ if [ ! -f "$1" ]; then
 	echo -e "[*] Ports copied to clipboard\n"  >> extractPorts.tmp
 	cat extractPorts.tmp; rm extractPorts.tmp
 }
+
+parse_git_branch() {
+     git branch 2>/dev/null | grep '^*' | colrm 1 2
+}
+
+export PS1="\[$(tput sgr0)\]\[\e[90m\][\t] \[\e[31m\]\$(if [ \$? -ne 0 ]; then echo \"✘ \"; fi)\[\e[34m\]\u\[\e[0m\]@\[\e[32m\]\h\[\e[0m\]:\[\e[36m\]\w\[\e[33m\]\$(if [ \$(parse_git_branch) ]; then echo \" (git:\$(parse_git_branch))\"; fi)\[\e[0m\]\\$ "
