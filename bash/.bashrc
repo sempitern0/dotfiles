@@ -40,6 +40,13 @@ export LESS_TERMCAP_us=$'\E[01;32m'
 export MANPAGER="less -R --use-color -Dd+r -Du+g"
 export MAN_KEEP_FORMATTING=1
 
+export CHROME_DESKTOP_AGENT="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"
+export EDGE_DESKTOP_AGENT="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36 Edg/122.0.0.0"
+export FIREFOX_DESKTOP_AGENT="Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:123.0) Gecko/20100101 Firefox/123.0"
+export ANDROID_MOBILE_AGENT="Mozilla/5.0 (Linux; Android 13; SM-S901B) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Mobile Safari/537.36"
+export IPHONE_MOBILE_AGENT="Mozilla/5.0 (iPhone; CPU iPhone OS 17_3 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.3 Mobile/15E148 Safari/604.1"
+export GOOGLE_BOT_DESKTOP_AGENT="Mozilla/5.0 (Linux; Android 6.0.1; Nexus 5X Build/MMB29P) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Mobile Safari/537.36 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)"
+
 # append to the history file, don't overwrite it
 shopt -s checkwinsize
 shopt -s histappend

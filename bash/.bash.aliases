@@ -50,3 +50,8 @@ alias cachefonts='fc-cache -f -v'
 alias icat='kitty +kitten icat'
 alias purgepkg='sudo apt autoremove --purge'
 alias shredd='shred -uzv -n 10'
+
+alias nmap='nmap --script-args http.useragent="$CHROME_DESKTOP_AGENT"'
+alias wpscan='wpscan --ua $FIREFOX_DESKTOP_AGENT'
+alias curl='-A $EDGE_DESKTOP_AGENT'
+alias wget='-U $ANDROID_MOBILE_AGENT'
