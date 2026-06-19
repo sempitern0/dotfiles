@@ -14,6 +14,9 @@ iatest=$(expr index "$-" i)
 
 # Disable the bell
 if [[ $iatest -gt 0 ]]; then bind "set bell-style none"; fi
+setterm --blength 0 > /dev/null 2>&1
+# https://unix.stackexchange.com/questions/545045/what-is-the-difference-between-ixon-and-ixoff-tty-attributes
+stty -ixon
 
 # Expand the history size
 export HISTFILESIZE=10000
@@ -135,76 +138,9 @@ if [ -e $HOME/.bash.aliases ]; then
     source $HOME/.bash.aliases
 fi
 
-#######################################################
-# SPECIAL FUNCTIONS
-#######################################################
-# Extracts any archive(s) (if unp isn't installed)
-# EXAMPLE: extract fotos.zip documentos.rar notas.txt.gz
-extract() {
-	for archive in "$@"; do
-		if [ -f "$archive" ]; then
-			case $archive in
-			*.tar.bz2) tar xvjf $archive ;;
-			*.tar.gz) tar xvzf $archive ;;
-      *.tar.xz) tar xvJf "$archive" ;;
-			*.bz2) bunzip2 $archive ;;
-			*.rar) rar x $archive ;;
-			*.gz) gunzip $archive ;;
-			*.tar) tar xvf $archive ;;
-			*.tbz2) tar xvjf $archive ;;
-			*.tgz) tar xvzf $archive ;;
-			*.zip) unzip $archive ;;
-			*.Z) uncompress $archive ;;
-			*.7z) 7z x $archive ;;
-      *.xz) xz -d "$archive" ;;
-			*) echo "Don't know how to extract '$archive'..." ;;
-			esac
-		else
-			echo "'$archive' is not a valid file!"
-		fi
-	done
-}
-
-
-
-# Searches for text in all files in the current folder
-ftext() {
-	# -i case-insensitive
-	# -I ignore binary files
-	# -H causes filename to be printed
-	# -r recursive search
-	# -n causes line number to be printed
-	# optional: -F treat search term as a literal, not a regular expression
-	# optional: -l only print filenames and not the matching lines ex. grep -irl "$1" *
-	grep -iIHrn --color=always "$1" . | less -r
-}
-
-toPaste() {
-    if [ -f "$1" ]; then
-        xclip -sel c < "$1"
-        echo "📋 Contenido de '$(basename "$1")' copiado al portapapeles."
-    else
-        echo "❌ Error: El archivo '$1' no existe."
-    fi
-}
-
-# Extract nmap information:
-
-extractNmapPorts() {
-if [ ! -f "$1" ]; then
-		echo "File $1 not found"
-		return 1
-	fi
-
-	ports="$(cat $1 | grep -oP '\d{1,5}/open' | awk '{print $1}' FS='/' | xargs | tr ' ' ',')";
-	ip_address="$(cat $1 | grep -oP '\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}' | sort -u | head -n 1)"
-	echo -e "\n[*] Extracting information...\n" > extractPorts.tmp
-	echo -e "\t[*] IP Address: $ip_address"  >> extractPorts.tmp
-	echo -e "\t[*] Open ports: $ports\n"  >> extractPorts.tmp
-	echo $ports | tr -d '\n' | xclip -selection clipboard
-	echo -e "[*] Ports copied to clipboard\n"  >> extractPorts.tmp
-	cat extractPorts.tmp; rm extractPorts.tmp
-}
+if [ -e $HOME/.bash.functions ]; then
+    source $HOME/.bash.functions
+fi
 
 parse_git_branch() {
      git branch 2>/dev/null | grep '^*' | colrm 1 2
@@ -214,3 +150,7 @@ parse_git_branch() {
 export PS1="\[$(tput sgr0)\]\[\e[90m\][\t] \[\e[31m\]\$(if [ \$? -ne 0 ]; then echo \"✘ \"; fi)\[\e[34m\]\u\[\e[0m\]@\[\e[32m\]\h\[\e[0m\]:\[\e[36m\]\w\[\e[33m\]\$(if [ \$(parse_git_branch) ]; then echo \" (git:\$(parse_git_branch))\"; fi)\[\e[0m\]\\$ "
 
 source /usr/share/doc/fzf/examples/key-bindings.bash
+
+if command -v fastfetch >/dev/null 2>&1; then
+  fastfetch
+fi

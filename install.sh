@@ -145,7 +145,7 @@ configure_bash_files() {
         return 1
     fi
 
-    local files=(".bashrc" ".bash.aliases")
+    local files=(".bashrc" ".bash.aliases". ".bash.functions")
 
     for file in "${files[@]}"; do
         local src="$source_dir/$file"
@@ -214,7 +214,7 @@ main() {
     update_system
     print_separator
 
-    install_packages coreutils ntp curl wget inetutils-traceroute vim git software-properties-common ca-certificates tree xclip htop iftop feh bat kitty lynis chkrootkit fastfetch nmap whatweb fzf ripgrep
+    install_packages coreutils ntp curl wget inetutils-traceroute vim git software-properties-common ca-certificates tree xclip htop iftop feh chafa bat kitty lynis chkrootkit fastfetch nmap whatweb fzf ripgrep jq
     print_separator
 
     configure_bash_files
