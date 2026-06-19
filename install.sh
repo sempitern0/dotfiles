@@ -214,7 +214,7 @@ main() {
     update_system
     print_separator
 
-    install_packages coreutils ntp curl wget inetutils-traceroute vim git software-properties-common ca-certificates tree xclip htop iftop feh bat kitty lynis chkrootkit fastfetch nmap whatweb
+    install_packages coreutils ntp curl wget inetutils-traceroute vim git software-properties-common ca-certificates tree xclip htop iftop feh bat kitty lynis chkrootkit fastfetch nmap whatweb fzf ripgrep
     print_separator
 
     configure_bash_files
