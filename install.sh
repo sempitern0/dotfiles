@@ -214,7 +214,10 @@ main() {
     update_system
     print_separator
 
-    install_packages coreutils ntp curl wget inetutils-traceroute vim git software-properties-common ca-certificates tree xclip htop iftop feh chafa bat kitty lynis chkrootkit fastfetch nmap whatweb fzf ripgrep jq
+    install_packages coreutils ntp curl wget inetutils-traceroute apt-transport-https vim git software-properties-common ca-certificates tree xclip htop iftop feh chafa bat kitty lynis chkrootkit fastfetch nmap whatweb fzf ripgrep jq
+
+    sudo apt clean -y && sudo apt autoremove -y --purge
+
     print_separator
 
     configure_bash_files
