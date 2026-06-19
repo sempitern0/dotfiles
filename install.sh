@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+export DEBIAN_FRONTEND=noninteractive
+
 # ANSI ESCAPE CODE COLOURS
 greenColour='\033[0;32m'
 redColour='\033[0;31m'
