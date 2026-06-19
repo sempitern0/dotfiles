@@ -235,3 +235,10 @@ main() {
 }
 
 main "$@"
+
+## Auto source the terminal to see the changes
+if [[ $- == *i* ]]; then
+    if ! shopt -q login_shell; then
+        source ~/.bashrc
+    fi
+fi

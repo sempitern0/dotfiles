@@ -63,7 +63,9 @@ export XDG_CACHE_HOME="$HOME/.cache"
 #shopt -s globstar
 
 # make less more friendly for non-text input files, see lesspipe(1)
-[ -x /usr/bin/lesspipe ] && eval "$(SHELL=/bin/sh lesspipe)"
+if command -v lesspipe >/dev/null 2>&1; then
+  eval "$(SHELL=/bin/sh lesspipe)"
+fi
 
 # set variable identifying the chroot you work in (used in the prompt below)
 if [ -z "${debian_chroot:-}" ] && [ -r /etc/debian_chroot ]; then
@@ -96,6 +98,7 @@ if [ "$color_prompt" = yes ]; then
 else
     PS1='${debian_chroot:+($debian_chroot)}\u@\h:\w\$ '
 fi
+
 unset color_prompt force_color_prompt
 
 # If this is an xterm set the title to user@host:dir
@@ -207,4 +210,5 @@ parse_git_branch() {
      git branch 2>/dev/null | grep '^*' | colrm 1 2
 }
 
+## Terminal hostname display
 export PS1="\[$(tput sgr0)\]\[\e[90m\][\t] \[\e[31m\]\$(if [ \$? -ne 0 ]; then echo \"✘ \"; fi)\[\e[34m\]\u\[\e[0m\]@\[\e[32m\]\h\[\e[0m\]:\[\e[36m\]\w\[\e[33m\]\$(if [ \$(parse_git_branch) ]; then echo \" (git:\$(parse_git_branch))\"; fi)\[\e[0m\]\\$ "

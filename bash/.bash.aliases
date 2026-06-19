@@ -1,3 +1,5 @@
+alias refresh='source ~/.bashrc'
+
 alias da='date "+%Y-%m-%d %A %T %Z"'
 alias ll='ls -lahF'
 alias la='ls -'
@@ -23,13 +25,21 @@ alias listen='ss -tulnp'
 alias netcon="ss -ntu | awk '{print \$5}' | cut -d: -f1 | sort | uniq -c | sort -nr"
 alias myip="curl -s https://ifconfig.me; echo '' && ip -br -4 addr"
 alias curltime='curl -o /dev/null -s -w "Connect: %{time_connect}s\nTTFB: %{time_starttransfer}s\nTotal: %{time_total}s\nStatus: %{http_code}\n"'
+alias nmap='nmap --script-args http.useragent="$CHROME_DESKTOP_AGENT"'
+alias wpscan='wpscan --ua $FIREFOX_DESKTOP_AGENT'
+alias curl='-A $EDGE_DESKTOP_AGENT'
+alias wget='-U $ANDROID_MOBILE_AGENT'
 
 alias diskspace="du -S | sort -n -r |more"
 alias folders='du -h --max-depth=1'
 alias folderssort='find . -maxdepth 1 -type d -print0 | xargs -0 du -sk | sort -rn'
 alias cpuinfo="less /proc/cpuinfo"
+alias meminfo='free -h'
+
 alias dropcache='sudo sync; echo 3 | sudo tee /proc/sys/vm/drop_caches'
 alias failed='systemctl --failed'
+alias startall='systemctl start --all'
+alias stopall='systemctl stop --all'
 
 ## Tree is an external package that needs to be installed
 alias tree='tree -CAhF --dirsfirst'
@@ -48,10 +58,6 @@ alias update='sudo apt-get update && sudo apt-get upgrade'
 
 alias cachefonts='fc-cache -f -v'
 alias icat='kitty +kitten icat'
-alias purgepkg='sudo apt autoremove --purge'
+alias cleanapt='sudo apt clean && sudo apt autoremove --purge'
+alias cleanpacman='sudo pacman -Scc'
 alias shredd='shred -uzv -n 10'
-
-alias nmap='nmap --script-args http.useragent="$CHROME_DESKTOP_AGENT"'
-alias wpscan='wpscan --ua $FIREFOX_DESKTOP_AGENT'
-alias curl='-A $EDGE_DESKTOP_AGENT'
-alias wget='-U $ANDROID_MOBILE_AGENT'
