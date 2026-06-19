@@ -12,6 +12,7 @@ alias +x='chmod +x'
 
 # Batcat it's an external package that needs to be installed
 alias bat='batcat'
+alias fzf="fzf --preview 'bat --style=numbers --color=always --line-range :500 {}'"
 
 # Add an "alert" alias for long running commands.  Use like so:
 #   sleep 10; alert
