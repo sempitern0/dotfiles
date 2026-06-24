@@ -28,8 +28,8 @@ alias myip="curl -s https://ifconfig.me; echo '' && ip -br -4 addr"
 alias curltime='curl -o /dev/null -s -w "Connect: %{time_connect}s\nTTFB: %{time_starttransfer}s\nTotal: %{time_total}s\nStatus: %{http_code}\n"'
 alias nmap='nmap --script-args http.useragent="$CHROME_DESKTOP_AGENT"'
 alias wpscan='wpscan --ua $FIREFOX_DESKTOP_AGENT'
-alias curl='-A $EDGE_DESKTOP_AGENT'
-alias wget='-U $ANDROID_MOBILE_AGENT'
+alias curl='curl -A "$EDGE_DESKTOP_AGENT"'
+alias wget='wget -U "$ANDROID_MOBILE_AGENT"'
 
 alias diskspace="du -S | sort -n -r |more"
 alias folders='du -h --max-depth=1'
