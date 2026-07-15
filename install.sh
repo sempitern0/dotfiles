@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-export DEBIAN_FRONTEND=noninteractive
+#export DEBIAN_FRONTEND=noninteractive
 
 # ANSI ESCAPE CODE COLOURS
 greenColour='\033[0;32m'
@@ -97,7 +97,7 @@ update_system() {
     fi
 
     msg_info "Upgrading system packages (this might take a while)..."
-    if ! "${prefix[@]}" "${UPGRADE_CMD[@]}" &> /dev/null; then
+    if ! "${prefix[@]}" "${UPGRADE_CMD[@]}"; then
         msg_error "System upgrade failed."
         return 1
     fi
