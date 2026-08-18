@@ -11,22 +11,24 @@ prepare_distribution() {
         exit 1
     fi
 
-    local os_id os_like
-    os_id=$(grep -E '^ID=' /etc/os-release | cut -d= -f2 | tr -d '"')
-    os_like=$(grep -E '^ID_LIKE=' /etc/os-release | cut -d= -f2 | tr -d '"')
+    source /etc/os-release
 
+    local os_id="${ID:-}"
+    local os_like="${ID_LIKE:-}"
     local target_module=""
 
     case "${os_id}" in
         debian|ubuntu|pop|mint|kali|raspbian) target_module="debian" ;;
         arch|manjaro|endeavouros|garuda)       target_module="arch" ;;
+        fedora|rhel|centos)                    target_module="fedora" ;;
     esac
 
-    if [[ -z "${target_module}" ]]; then
+    if [[ -z "${target_module}" && -n "${os_like}" ]]; then
         for family in ${os_like}; do
             case "${family}" in
                 debian|ubuntu) target_module="debian"; break ;;
                 arch)          target_module="arch"; break ;;
+                fedora|rhel)   target_module="fedora"; break ;;
             esac
         done
     fi

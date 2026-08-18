@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 
 PACKAGE_MANAGER="pacman"
+AUR_HELPER=""
+
 
 INSTALL_CMD=("sudo" "${PACKAGE_MANAGER}" "-S" "--noconfirm" "--needed")
 UPDATE_CMD=("sudo" "${PACKAGE_MANAGER}" "-Sy")
@@ -12,6 +14,7 @@ CLEANUP_CMD=(
 )
 
 PPA_REPOS=()
+AUR_PACKAGES=()
 
 PACKAGES=(
     coreutils
@@ -43,6 +46,75 @@ PACKAGES=(
 
 msg_info "Preparing ARCH environment..."
 
+
+ensure_aur_helper() {
+    if command -v paru &>/dev/null; then
+        AUR_HELPER="paru"
+        return 0
+    elif command -v yay &>/dev/null; then
+        AUR_HELPER="yay"
+        return 0
+    fi
+
+    msg_info "No AUR helper found. Installing 'yay-bin'..."
+
+    "sudo" pacman -S --needed --noconfirm base-devel git
+
+    local target_user="${SUDO_USER:-$USER}"
+
+    if [[ "$target_user" == "root" ]]; then
+        msg_error "makepkg cannot be executed as root."
+        return 1
+    fi
+
+    local build_dir="/tmp/yay-bin"
+    rm -rf "$build_dir"
+
+    msg_info "Cloning  yay-bin repository for user $target_user..."
+    sudo -u "$target_user" git clone https://aur.archlinux.org/yay-bin.git "$build_dir"
+
+    (
+        cd "$build_dir" || exit 1
+        msg_info "Compilando e instalando yay-bin..."
+        sudo -u "$target_user" makepkg -si --noconfirm
+    )
+
+    rm -rf "$build_dir"
+
+    if command -v yay &>/dev/null; then
+        AUR_HELPER="yay"
+        msg_success "AUR helper 'yay' installed."
+    else
+        msg_error "An error happened installing AUR helper."
+        return 1
+    fi
+}
+
+install_aur_packages() {
+    # Si no hay paquetes de AUR definidos o el array está vacío, omitir
+    if [ -z "${AUR_PACKAGES+x}" ] || [ ${#AUR_PACKAGES[@]} -eq 0 ]; then
+        return 0
+    fi
+
+    msg_info "Detected ${#AUR_PACKAGES[@]} AUR packages to install."
+
+    # Asegurar que el helper existe
+    ensure_aur_helper || return 1
+
+    local target_user="${SUDO_USER:-$USER}"
+
+    msg_info "Instalando AUR packages through ${AUR_HELPER}: ${AUR_PACKAGES[*]}"
+
+    # Los AUR helpers NO deben ejecutarse con 'sudo' directo
+    if [[ $EUID -eq 0 ]]; then
+        sudo -u "$target_user" "$AUR_HELPER" -S --needed --noconfirm "${AUR_PACKAGES[@]}"
+    else
+        "$AUR_HELPER" -S --needed --noconfirm "${AUR_PACKAGES[@]}"
+    fi
+
+    msg_success "AUR packages installed with success."
+}
+
 install_system_packages() {
    if [ -n "${PPA_REPOS+x}" ] && [ ${#PPA_REPOS[@]} -gt 0 ]; then
         if [ ${#REPO_CMD[@]} -gt 0 ] && command -v "${REPO_CMD[1]}" &>/dev/null; then
@@ -68,7 +140,7 @@ install_system_packages() {
         msg_info "Updating system packages..."
         "${UPGRADE_CMD[@]}"
     fi
-
+    
     if [ -n "${PACKAGES+x}" ] && [ ${#PACKAGES[@]} -gt 0 ]; then
         msg_info "Installing selected (${#PACKAGES[@]} packages)..."
         if "${INSTALL_CMD[@]}" "${PACKAGES[@]}"; then
@@ -88,3 +160,4 @@ install_system_packages() {
 }
 
 install_system_packages
+install_aur_packages
