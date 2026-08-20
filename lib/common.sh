@@ -84,3 +84,37 @@ is_server_environment() {
 
     return 0 # Server environment
 }
+
+copy_with_backup() {
+    local src="$1"
+    local dest="$2"
+    local user="$3"
+
+    if [[ ! -f "$src" ]]; then
+        msg_error "Source file '$src' does not exist."
+        return 1
+    fi
+
+    if [[ -f "$dest" ]]; then
+        local backup_file="$dest.bak"
+
+        if [[ ! -f "$backup_file" ]]; then
+            msg_warn "Existing file found at '$dest'. Backing up to '$backup_file'..."
+            cp -f "$dest" "$backup_file"
+            chown "$user:$user" "$backup_file"
+        else
+            msg_info "Backup '$backup_file' already exists. Skipping backup creation to preserve the original."
+        fi
+    fi
+
+    msg_info "Copying '$(basename "$src")' -> '$dest'..."
+    cp -f "$src" "$dest"
+    chown "$user:$user" "$dest"
+}
+
+print_section() {
+    local title="$1"
+    echo -e "\n${cyanColour}======================================================================${endColour}"
+    echo -e "${cyanColour}  :: ${title}${endColour}"
+    echo -e "${cyanColour}======================================================================${endColour}\n"
+}

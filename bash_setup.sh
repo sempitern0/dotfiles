@@ -5,9 +5,16 @@ CURRENT_DIR=$(dirname -- "$(readlink -f -- "$0")")
 
 source "${CURRENT_DIR}/lib/common.sh"
 
+print_section() {
+    local title="$1"
+    echo -e "\n${cyanColour}======================================================================${endColour}"
+    echo -e "${cyanColour}  :: ${title}${endColour}"
+    echo -e "${cyanColour}======================================================================${endColour}\n"
+}
+
 
 configure_bash_files() {
-    msg_info "Configuring Bash dotfiles..."
+    print_section "Configuring Bash Dotfiles"
 
     local target_user="${SUDO_USER:-$USER}"
     local target_home
@@ -15,8 +22,8 @@ configure_bash_files() {
 
     local source_dir="$CURRENT_DIR/bash/conf"
 
-    if [ ! -d "$source_dir" ]; then
-        msg_error "Source directory '$source_dir' not found in the repository."
+    if [[ ! -d "$source_dir" ]]; then
+        msg_error "Source directory '$source_dir' not found. Skipping Bash configuration."
         return 1
     fi
 
@@ -26,53 +33,86 @@ configure_bash_files() {
         local src="$source_dir/$file"
         local dest="$target_home/$file"
 
-        if [ -f "$src" ]; then
-            if [ -f "$dest" ]; then
-                msg_info "Backing up existing $file to $file.bak"
-                cp "$dest" "$dest.bak"
-            fi
-
-            msg_info "Copying $file to $target_home..."
-            cp "$src" "$dest"
-
-            chown "$target_user:$target_user" "$dest"
-            [ -f "$dest.bak" ] && chown "$target_user:$target_user" "$dest.bak"
+        if [[ -f "$src" ]]; then
+            copy_with_backup "$src" "$dest" "$target_user"
         else
-            msg_warn "File '$file' not found in '$source_dir', skipping."
+            msg_warn "Optional file '$file' not found in '$source_dir', skipping."
         fi
     done
 
-    msg_success "Bash dotfiles successfully configured for user $target_user!"
+    msg_success "Bash dotfiles successfully configured for user '$target_user'!"
+}
+
+configure_git() {
+    print_section "Configuring Git"
+
+    local target_user="${SUDO_USER:-$USER}"
+    local target_home=$(getent passwd "$target_user" | cut -d: -f6)
+
+    if ! command -v git &>/dev/null; then
+        msg_error "Git binary not found in PATH. Please ensure it is installed in your distro setup script."
+        return 1
+    fi
+
+    local src="$CURRENT_DIR/git/.gitconfig"
+    local dest="$target_home/.gitconfig"
+
+    if [[ ! -f "$src" ]]; then
+        msg_error "Git configuration source file not found at: '$src'"
+        return 1
+    fi
+
+    copy_with_backup "$src" "$dest" "$target_user"
+    msg_success "Git configured successfully for user '$target_user'!"
 }
 
 configure_vim() {
+    print_section "Configuring Vim"
+
     local target_user="${SUDO_USER:-$USER}"
     local target_home
     target_home=$(getent passwd "$target_user" | cut -d: -f6)
 
-    if [ -d "$target_home/.vim_runtime" ]; then
-        msg_warn "Vim configuration (.vim_runtime) already exists for $target_user. Skipping installation."
+    if [[ -d "$target_home/.vim_runtime" ]]; then
+        msg_warn "Vim configuration (.vim_runtime) already exists. Skipping."
         return 0
     fi
 
-    msg_info "Configuring Vim with amix/vimrc for user $target_user..."
+    msg_info "Cloning amix/vimrc repository for user '$target_user'..."
 
-    if ! sudo -u "$target_user" git clone --depth=1 https://github.com/amix/vimrc.git "$target_home/.vim_runtime" &> /dev/null; then
+    if ! sudo -u "$target_user" git clone --depth=1 https://github.com/amix/vimrc.git "$target_home/.vim_runtime" &>/dev/null; then
         msg_error "Failed to clone amix/vimrc repository."
         return 1
     fi
 
-    if ! sudo -u "$target_user" sh "$target_home/.vim_runtime/install_basic_vimrc.sh" &> /dev/null; then
+    msg_info "Executing vimrc setup script..."
+    if ! sudo -u "$target_user" sh "$target_home/.vim_runtime/install_basic_vimrc.sh" &>/dev/null; then
         msg_error "Failed to run amix/vimrc installer script."
         return 1
     fi
 
-    msg_success "Vim successfully configured for $target_user!"
+    msg_success "Vim configured successfully for '$target_user'!"
 }
 
+configure_bat_symlink() {
+    local target_user="${SUDO_USER:-$USER}"
+    local target_home=$(getent passwd "$target_user" | cut -d: -f6)
 
+    if command -v batcat &>/dev/null; then
+        if [[ ! -f "$target_home/.local/bin/bat" ]]; then
+            msg_info "Creating symlink 'bat' -> 'batcat' in $target_home/.local/bin..."
+            mkdir -p "$target_home/.local/bin"
+            ln -s "$(which batcat)" "$target_home/.local/bin/bat"
+            chown -R "$target_user:$target_user" "$target_home/.local"
+            msg_success "Symlink for 'bat' created successfully!"
+        fi
+    fi
+}
+
+# ------------------------------------------------------------------------------
+# MAIN EXECUTION
+# ------------------------------------------------------------------------------
 main() {
-
     if [[ $(uname -s) != "Linux" ]]; then
         msg_error "This script is only compatible with Linux distributions."
         exit 1
@@ -84,45 +124,32 @@ main() {
     fi
 
     clear
-    print_separator
-    echo -e "${cyanColour}Preparing the environment...${endColour}"
-    print_separator
+    print_section "Environment Setup - Initializing"
 
     local real_user="${SUDO_USER:-$USER}"
-    local real_home=$(getent passwd "$real_user" | cut -d: -f6)
     local os_distribution=$(detect_distribution) || exit 1
 
-    if [[ -z "${os_distribution}" ]]; then
-        msg_error "Unsupported distribution: ID='${os_distribution}'"
-        exit 1
-    fi
+
+    msg_info "Target User: $real_user"
+    msg_info "Detected Distribution: ${os_distribution:-Unknown}"
 
     local os_module_path="${CURRENT_DIR}/bash/distros/${os_distribution}.sh"
-
-    if [[ ! -f "${os_module_path}" ]]; then
-        msg_error "Module not found: ${os_module_path}"
-        exit 1
+   
+    if [[ -f "${os_module_path}" ]]; then
+        msg_info "Loading distro module: ${os_distribution}.sh"
+        source "${os_module_path}"
+    else
+        msg_warn "No specific module found for '${os_distribution}'. Proceeding with generic configuration..."
     fi
 
-    msg_info "Detected distribution: ${os_distribution} -> Loading module: ${os_distribution}.sh"
-    
-    source "${os_module_path}"
-
-    print_separator
     configure_bash_files
-    print_separator
+    configure_git
     configure_vim
+    configure_bat_symlink
 
-    if command -v batcat &> /dev/null; then
-        if [ ! -f "$real_home/.local/bin/bat" ]; then
-            msg_info "Creating symlink for 'bat' command..."
-            mkdir -p "$real_home/.local/bin"
-            ln -s /usr/bin/batcat "$real_home/.local/bin/bat"
-            chown -R "$real_user:$real_user" "$real_home/.local/bin"
-        fi
-    fi
-
-    msg_success "The environment is ready to use, enjoy!"
+    print_section "Setup Complete"
+    msg_success "The environment is ready to use!"
+    
 }
 
 main "$@"
