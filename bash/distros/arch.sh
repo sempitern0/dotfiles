@@ -4,13 +4,13 @@ PACKAGE_MANAGER="pacman"
 AUR_HELPER=""
 
 
-INSTALL_CMD=("sudo" "${PACKAGE_MANAGER}" "-S" "--noconfirm" "--needed")
-UPDATE_CMD=("sudo" "${PACKAGE_MANAGER}" "-Sy")
-UPGRADE_CMD=("sudo" "${PACKAGE_MANAGER}" "-Syu" "--noconfirm")
+INSTALL_CMD=("${PACKAGE_MANAGER}" "-S" "--noconfirm" "--needed")
+UPDATE_CMD=("${PACKAGE_MANAGER}" "-Sy")
+UPGRADE_CMD=("${PACKAGE_MANAGER}" "-Syu" "--noconfirm")
 REPO_CMD=()
 CLEANUP_CMD=(
     "bash" "-c"
-    "sudo pacman -Sc --noconfirm && (orphans=\$(pacman -Qtdq 2>/dev/null); [ -n \"\$orphans\" ] && sudo pacman -Rns --noconfirm \$orphans || true)"
+    "pacman -Sc --noconfirm && (orphans=\$(pacman -Qtdq 2>/dev/null); [ -n \"\$orphans\" ] && pacman -Rns --noconfirm \$orphans || true)"
 )
 
 PPA_REPOS=()
@@ -31,6 +31,7 @@ PACKAGES=(
     xclip
     htop
     iftop
+source "${CURRENT_DIR}/lib/common.sh"
     feh
     chafa
     bat
@@ -58,7 +59,7 @@ ensure_aur_helper() {
 
     msg_info "No AUR helper found. Installing 'yay-bin'..."
 
-    "sudo" pacman -S --needed --noconfirm base-devel git
+    pacman -S --needed --noconfirm base-devel git
 
     local target_user="${SUDO_USER:-$USER}"
 

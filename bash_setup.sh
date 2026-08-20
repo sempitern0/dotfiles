@@ -5,50 +5,6 @@ CURRENT_DIR=$(dirname -- "$(readlink -f -- "$0")")
 
 source "${CURRENT_DIR}/lib/common.sh"
 
-prepare_distribution() {
-    if [[ ! -f /etc/os-release ]]; then
-        msg_error "Distribution could not be identified (/etc/os-release does not exist)."
-        exit 1
-    fi
-
-    source /etc/os-release
-
-    local os_id="${ID:-}"
-    local os_like="${ID_LIKE:-}"
-    local target_module=""
-
-    case "${os_id}" in
-        debian|ubuntu|pop|mint|kali|raspbian) target_module="debian" ;;
-        arch|manjaro|endeavouros|garuda)       target_module="arch" ;;
-        fedora|rhel|centos)                    target_module="fedora" ;;
-    esac
-
-    if [[ -z "${target_module}" && -n "${os_like}" ]]; then
-        for family in ${os_like}; do
-            case "${family}" in
-                debian|ubuntu) target_module="debian"; break ;;
-                arch)          target_module="arch"; break ;;
-                fedora|rhel)   target_module="fedora"; break ;;
-            esac
-        done
-    fi
-
-    if [[ -z "${target_module}" ]]; then
-        msg_error "Unsupported distribution: ID='${os_id}'"
-        exit 1
-    fi
-
-    local module_path="${CURRENT_DIR}/distros/${target_module}.sh"
-
-    if [[ ! -f "${module_path}" ]]; then
-        msg_error "Module not found: ${module_path}"
-        exit 1
-    fi
-
-    msg_info "Detected distribution: ${os_id} -> Loading module: ${target_module}.sh"
-    
-    source "${module_path}"
-}
 
 configure_bash_files() {
     msg_info "Configuring Bash dotfiles..."
@@ -57,14 +13,13 @@ configure_bash_files() {
     local target_home
     target_home=$(getent passwd "$target_user" | cut -d: -f6)
 
-    local source_dir="$CURRENT_DIR/bash"
+    local source_dir="$CURRENT_DIR/bash/conf"
 
     if [ ! -d "$source_dir" ]; then
         msg_error "Source directory '$source_dir' not found in the repository."
         return 1
     fi
 
-    # Corrección de la errata en .bash.aliases
     local files=(".bashrc" ".bash.aliases" ".bash.functions")
 
     for file in "${files[@]}"; do
@@ -115,10 +70,17 @@ configure_vim() {
     msg_success "Vim successfully configured for $target_user!"
 }
 
+
 main() {
+
     if [[ $(uname -s) != "Linux" ]]; then
         msg_error "This script is only compatible with Linux distributions."
         exit 1
+    fi
+
+    if [[ $EUID -ne 0 ]]; then
+        msg_warn "Root privileges required. Re-running with sudo..."
+        exec sudo "$0" "$@"
     fi
 
     clear
@@ -127,10 +89,25 @@ main() {
     print_separator
 
     local real_user="${SUDO_USER:-$USER}"
-    local real_home
-    real_home=$(getent passwd "$real_user" | cut -d: -f6)
+    local real_home=$(getent passwd "$real_user" | cut -d: -f6)
+    local os_distribution=$(detect_distribution) || exit 1
 
-    prepare_distribution
+    if [[ -z "${os_distribution}" ]]; then
+        msg_error "Unsupported distribution: ID='${os_distribution}'"
+        exit 1
+    fi
+
+    local os_module_path="${CURRENT_DIR}/bash/distros/${os_distribution}.sh"
+
+    if [[ ! -f "${os_module_path}" ]]; then
+        msg_error "Module not found: ${os_module_path}"
+        exit 1
+    fi
+
+    msg_info "Detected distribution: ${os_distribution} -> Loading module: ${os_distribution}.sh"
+    
+    source "${os_module_path}"
+
     print_separator
     configure_bash_files
     print_separator

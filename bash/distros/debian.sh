@@ -37,11 +37,11 @@ PACKAGES=(
     jq
 )
 
-INSTALL_CMD=("sudo" "${PACKAGE_MANAGER}" "install" "-y")
-UPDATE_CMD=("sudo" "${PACKAGE_MANAGER}" "update")
-UPGRADE_CMD=("sudo" "${PACKAGE_MANAGER}" "upgrade" "-y")
-CLEANUP_CMD=("sudo" "${PACKAGE_MANAGER}" "autoremove" "-y" "--purge")
-REPO_CMD=("sudo" "add-apt-repository" "-y")
+INSTALL_CMD=("${PACKAGE_MANAGER}" "install" "-y")
+UPDATE_CMD=("${PACKAGE_MANAGER}" "update")
+UPGRADE_CMD=("${PACKAGE_MANAGER}" "upgrade" "-y")
+CLEANUP_CMD=("${PACKAGE_MANAGER}" "autoremove" "-y" "--purge")
+REPO_CMD=("add-apt-repository" "-y")
 
 msg_info "Preparing DEBIAN environment..."
 
