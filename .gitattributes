@@ -1,15 +1,103 @@
 * text=auto eol=lf
-*.bat text eol=crlf
-*.cmd text eol=crlf
-*.ahk text eol=crlf
-*.reg text eol=crlf
 
-*.png binary
-*.jpg binary
-*.jpeg binary
-*.gif binary
-*.ico binary
-*.pdf binary
-*.woff binary
-*.woff2 binary
-*.ttf binary
+## https://github.com/github-linguist/linguist/blob/main/docs/overrides.md
+package-lock.json   linguist-generated=true
+yarn.lock           linguist-generated=true
+pnpm-lock.yaml      linguist-generated=true
+Cargo.lock          linguist-generated=true
+Composer.lock       linguist-generated=true
+*.min.js            linguist-generated=true
+*.min.css           linguist-generated=true
+*.map               linguist-generated=true
+
+# ------------------------------------------------------------------------------
+# Windows specifics (CRLF is required)
+# ------------------------------------------------------------------------------
+*.bat           text eol=crlf
+*.cmd           text eol=crlf
+*.ps1           text eol=crlf
+*.ahk           text eol=crlf
+*.reg           text eol=crlf
+*.sln           text eol=crlf
+*.vcxproj       text eol=crlf
+*.csproj        text eol=crlf
+
+# ------------------------------------------------------------------------------
+# POSIX files LINUX / MAC (LF is required)
+# ------------------------------------------------------------------------------
+*.sh            text eol=lf
+*.bash          text eol=lf
+*.zsh           text eol=lf
+*.fish          text eol=lf
+Makefile        text eol=lf
+Dockerfile      text eol=lf
+
+*.c             text eol=lf
+*.h             text eol=lf
+*.cpp           text eol=lf
+*.hpp           text eol=lf
+*.py            text eol=lf
+*.js            text eol=lf
+*.ts            text eol=lf
+*.jsx           text eol=lf
+*.tsx           text eol=lf
+*.json          text eol=lf
+*.html          text eol=lf
+*.css           text eol=lf
+*.scss          text eol=lf
+*.md            text eol=lf
+*.yml           text eol=lf
+*.yaml          text eol=lf
+*.xml           text eol=lf
+*.sql           text eol=lf
+*.svg           text eol=lf
+
+
+# ------------------------------------------------------------------------------
+# Binaries
+# ------------------------------------------------------------------------------
+*.exe           binary
+*.dll           binary
+*.so            binary
+*.dylib         binary
+*.bin           binary
+*.iso           binary
+*.img           binary
+*.o             binary
+*.a             binary
+*.pyc           binary
+*.class         binary
+*.woff          binary
+*.woff2         binary
+*.ttf           binary
+*.eot           binary
+*.otf           binary
+*.mp3           binary
+*.wav           binary
+*.ogg           binary
+*.flac          binary
+*.aac           binary
+*.mp4           binary
+*.mkv           binary
+*.webm          binary
+*.avi           binary
+*.mov           binary
+*.zip           binary
+*.tar           binary
+*.gz            binary
+*.bz2           binary
+*.xz            binary
+*.7z            binary
+*.rar           binary
+*.tgz           binary
+*.pdf           binary
+*.doc           binary
+*.docx          binary
+*.xls           binary
+*.xlsx          binary
+*.ppt           binary
+*.pptx          binary
+*.sqlite        binary
+*.sqlite3       binary
+*.db            binary
+

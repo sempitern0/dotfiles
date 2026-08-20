@@ -151,6 +151,7 @@ export PS1="\[$(tput sgr0)\]\[\e[90m\][\t] \[\e[31m\]\$(if [ \$? -ne 0 ]; then e
 
 source /usr/share/doc/fzf/examples/key-bindings.bash
 
-if command -v fastfetch >/dev/null 2>&1; then
-  fastfetch
-fi
+# Ignored as it bothers me every time I open a new terminal tab
+# if command -v fastfetch >/dev/null 2>&1; then
+#   fastfetch
+# fi
