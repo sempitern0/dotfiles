@@ -6,6 +6,7 @@ CURRENT_DIR=$(dirname -- "$(readlink -f -- "$0")")
 source "${CURRENT_DIR}/lib/common.sh"
 
 SYSCTL_DIR="/etc/sysctl.d"
+UFW_BEFORE_RULES="/etc/ufw/before.rules"
 
 UFW_RULES="$CURRENT_DIR/hardening/network/ufw_rules.sh"
 HARDWARE_HARDENING_RULES="$CURRENT_DIR/hardening/hardware/memory_hardening.sh"
@@ -253,8 +254,50 @@ install_essentials() {
     msg_success "Essential utilities installed successfully."
 }
 
+apply_before_ufw_rules() {
+    msg_info "Configuring ufw advanced rules in ${UFW_BEFORE_RULES}..."
+
+    if [[ ! -f "$UFW_BEFORE_RULES" ]]; then
+        msg_error "File ${UFW_BEFORE_RULES} not found."
+        return 1
+    fi
+
+    # Backup original before.rules if not already backed up
+    if [[ ! -f "${UFW_BEFORE_RULES}.bak" ]]; then
+        cp "$UFW_BEFORE_RULES" "${UFW_BEFORE_RULES}.bak"
+        msg_info "Backup created at ${UFW_BEFORE_RULES}.bak"
+    fi
+
+    # Check if custom rules are already injected
+    if grep -q "ctstate INVALID" "$UFW_BEFORE_RULES"; then
+        msg_warn "Custom INVALID/ICMP rate-limiting rules already present. Skipping modification."
+        return 0
+    fi
+
+    # Comment out default unrestricted echo-request rule if present
+    sed -i 's/^-A ufw-before-input -p icmp --icmp-type echo-request -j ACCEPT/# &-disabled_by_script/' "$BEFORE_RULES"
+
+    # Inject custom rules before the final COMMIT statement of the *filter block
+    local snippet="
+# --- CUSTOM HARDENING RULES ---
+# Drop INVALID state packets (malformed packets / port scans)
+-A ufw-before-input -m conntrack --ctstate INVALID -j DROP
+
+# Rate-limit ICMP Pings (max 3/s with burst of 5)
+-A ufw-before-input -p icmp --icmp-type echo-request -m limit --limit 3/s --limit-burst 5 -j ACCEPT
+-A ufw-before-input -p icmp --icmp-type echo-request -j DROP
+"
+
+    # Insert snippet right before the COMMIT line
+    sed -i "/^COMMIT/i $snippet" "$UFW_BEFORE_RULES"
+
+    msg_info "Successfully injected INVALID packet drop and ICMP rate-limiting rules."
+}
+
 apply_ufw_rules() {
     if [[ -f "${UFW_RULES:-}" ]]; then
+        apply_before_ufw_rules
+
         msg_info "Applying UFW firewall rules..."
         source "$UFW_RULES"
 
