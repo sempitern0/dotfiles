@@ -10,7 +10,7 @@ UFW_BEFORE_RULES="/etc/ufw/before.rules"
 
 UFW_RULES="$CURRENT_DIR/hardening/network/ufw_rules.sh"
 HARDWARE_HARDENING_RULES="$CURRENT_DIR/hardening/hardware/memory_hardening.sh"
-
+ANTIVIRUS_SETUP="$CURRENT_DIR/hardening/antivirus/antivirus.sh"
 KERNEL_NETWORK_HARDENING_CONF="$CURRENT_DIR/hardening/network/99-hardening.conf"
 FAIL2BAN_CONF_DIR="${CURRENT_DIR}/hardening/fail2ban"
 APT_CONF_DIR="/etc/apt/apt.conf.d"
@@ -645,6 +645,7 @@ setup_ssh_hardening() {
 # Security Hardening - Production Profile
 PermitRootLogin no
 PasswordAuthentication no
+ChallengeResponseAuthentication no
 KbdInteractiveAuthentication no
 MaxAuthTries 3
 X11Forwarding no
@@ -655,6 +656,15 @@ EOF
     chmod 600 "$hardening_file"
 
     msg_info "Validating SSH daemon configuration syntax..."
+    ssh-keygen -A &>/dev/null
+    mkdir -p /run/sshd
+
+    # Disable active X11Forwarding in the main file to satisfy static security scanners
+    if grep -qs -i "^[[:space:]]*X11Forwarding[[:space:]]\+yes" "$main_sshd_conf"; then
+        msg_info "Commenting out legacy X11Forwarding in $main_sshd_conf to prevent static audit false positives..."
+        sed -i -E 's/^([[:space:]]*X11Forwarding[[:space:]]+yes)/# \1 # Disabled by hardening suite/gi' "$main_sshd_conf"
+    fi
+
     if sshd -t; then
         msg_success "SSH configuration syntax is valid."
 
@@ -665,8 +675,13 @@ EOF
 
         msg_info "Enabling and reloading $ssh_service service..."
         systemctl enable "$ssh_service" &>/dev/null
-        systemctl reload "$ssh_service" 2>/dev/null || systemctl restart "$ssh_service"
-        msg_success "SSH daemon successfully reloaded with hardened rules."
+        
+        if systemctl reload "$ssh_service" &>/dev/null || systemctl restart "$ssh_service" &>/dev/null; then
+            msg_success "SSH daemon successfully reloaded with hardened rules."
+        else
+            msg_error "Failed to reload or restart $ssh_service service."
+            return 1
+        fi
     else
         msg_error "SSH configuration validation failed. Removing deployed rules..."
         rm -f "$hardening_file"
@@ -806,6 +821,22 @@ setup_usbguard() {
     msg_success "USBGuard configured and active."
 }
 
+install_antivirus() {
+    local package_manager="$1"
+
+    if [[ -f "${ANTIVIRUS_SETUP:-}" ]]; then
+        msg_info "Loading antivirus module..."
+        if source "$ANTIVIRUS_SETUP"; then
+            setup_threat_protection "$package_manager"
+        else
+            msg_error "Failed to source antivirus setup script at: $ANTIVIRUS_SETUP"
+            return 1
+        fi
+    else
+        msg_warn "Antivirus installation script not found at: ${ANTIVIRUS_SETUP:-}"
+    fi
+}
+
 run_all_tasks() {
     local package_manager="$1"
     local os_distribution="$2"
@@ -849,6 +880,9 @@ run_all_tasks() {
     setup_usbguard "$package_manager" || msg_warn "USBGuard setup encountered issues."
     print_separator
 
+    install_antivirus "$package_manager" || msg_warn "Antivirus installation encountered issues."   
+    print_separator
+
     msg_success "Full deployment pipeline completed successfully."
 }
 
@@ -875,17 +909,18 @@ show_interactive_menu() {
         echo -e "12) ${cyanColour}SSH Hardening${endColour}        -> Disable root login, password auth & enforce key-based access"
         echo -e "13) ${cyanColour}Unused Services${endColour}      -> Disable Bluetooth, CUPS, Avahi-daemon & ModemManager"
         echo -e "14) ${cyanColour}AppArmor MAC${endColour}         -> Mandatory Access Control setup, caching & profile enforcement"        
+        echo -e "15) ${cyanColour}Threat Surface Protection${endColour} -> Prepare ClamAV, Lynis auditor, chkrootkit & ClamUI"        
        
        if [[ -f "$BACKUP_ARCHIVE" ]]; then
-            echo -e "15) ${purpleColour}Restore Backup${endColour}       -> ${greenColour}[Backup Available]${endColour} Revert system to initial state"
+            echo -e "16) ${purpleColour}Restore Backup${endColour}       -> ${greenColour}[Backup Available]${endColour} Revert system to initial state"
         else
-            echo -e "15) ${purpleColour}Restore Backup${endColour}       -> ${grayColour}[No Backup Found]${endColour} Revert system to initial state"
+            echo -e "16) ${purpleColour}Restore Backup${endColour}       -> ${grayColour}[No Backup Found]${endColour} Revert system to initial state"
         fi
 
-        echo -e "16) ${redColour}Exit${endColour}                 -> Terminate execution"
+        echo -e "17) ${redColour}Exit${endColour}                 -> Terminate execution"
         print_separator
 
-        read -rp "Select an option [1-16]: " choice
+        read -rp "Select an option [1-17]: " choice
 
         print_separator
         case "$choice" in
@@ -946,10 +981,14 @@ show_interactive_menu() {
                 read -rp "Press [ENTER] to return to menu..."
                 ;;
             15)
-                restore_backup
+                install_antivirus "$package_manager"
                 read -rp "Press [ENTER] to return to menu..."
                 ;;
             16)
+                restore_backup
+                read -rp "Press [ENTER] to return to menu..."
+                ;;
+            17)
                 msg_info "Exiting setup suite."
                 exit 0
                 ;;
