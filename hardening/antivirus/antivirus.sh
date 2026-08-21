@@ -151,7 +151,7 @@ setup_lynis() {
 EOF
     chmod 700 /etc/cron.daily/lynis-audit
 
-    msg_success "Lynis installed and daily audit cron job (/etc/cron.daily/lynis-audit) deployed."
+    msg_success "Lynis installed and daily audit cron job (/etc/cron.daily/lynis-audit)."
 }
 
 setup_chkrootkit() {
