@@ -92,21 +92,18 @@ ensure_aur_helper() {
 }
 
 install_aur_packages() {
-    # Si no hay paquetes de AUR definidos o el array está vacío, omitir
     if [ -z "${AUR_PACKAGES+x}" ] || [ ${#AUR_PACKAGES[@]} -eq 0 ]; then
         return 0
     fi
 
     msg_info "Detected ${#AUR_PACKAGES[@]} AUR packages to install."
 
-    # Asegurar que el helper existe
     ensure_aur_helper || return 1
 
     local target_user="${SUDO_USER:-$USER}"
 
-    msg_info "Instalando AUR packages through ${AUR_HELPER}: ${AUR_PACKAGES[*]}"
+    msg_info "Installing AUR packages through ${AUR_HELPER}: ${AUR_PACKAGES[*]}"
 
-    # Los AUR helpers NO deben ejecutarse con 'sudo' directo
     if [[ $EUID -eq 0 ]]; then
         sudo -u "$target_user" "$AUR_HELPER" -S --needed --noconfirm "${AUR_PACKAGES[@]}"
     else

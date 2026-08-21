@@ -747,17 +747,14 @@ disable_unused_services() {
     fi
 }
 
-# --- PASO 3: Opciones de montaje seguras (nodev, nosuid, noexec) ---
 setup_secure_mounts() {
     msg_info "Applying secure mount options (nodev, nosuid, noexec) to /dev/shm..."
 
-    # Aplicar montaje en caliente si /dev/shm está montado
     if mountpoint -q /dev/shm; then
         mount -o remount,nodev,nosuid,noexec /dev/shm 2>/dev/null || true
         msg_info "Remounted /dev/shm with nodev,nosuid,noexec."
     fi
 
-    # Asegurar persistencia en /etc/fstab
     if ! grep -qs "/dev/shm" /etc/fstab; then
         msg_info "Adding persistent /dev/shm security entry to /etc/fstab..."
         echo "tmpfs /dev/shm tmpfs defaults,nodev,nosuid,noexec 0 0" >> /etc/fstab
@@ -789,7 +786,6 @@ setup_usbguard() {
 
     msg_info "Evaluating environment type for USBGuard deployment..."
 
-    # Validación adicional: Confirmar si es un sistema tipo servidor
     if ! is_server_environment; then
         print_separator
         msg_warn "DESKTOP ENVIRONMENT DETECTED!"
