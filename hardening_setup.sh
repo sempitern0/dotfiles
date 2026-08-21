@@ -6,14 +6,18 @@ CURRENT_DIR=$(dirname -- "$(readlink -f -- "$0")")
 source "${CURRENT_DIR}/lib/common.sh"
 
 SYSCTL_DIR="/etc/sysctl.d"
-UFW_BEFORE_RULES="/etc/ufw/before.rules"
 
+UFW_BEFORE_RULES="/etc/ufw/before.rules"
 UFW_RULES="$CURRENT_DIR/hardening/network/ufw_rules.sh"
+QUAD9_DNS="$CURRENT_DIR/hardening/network/quad9_dns.sh"
+
 HARDWARE_HARDENING_RULES="$CURRENT_DIR/hardening/hardware/memory_hardening.sh"
 ANTIVIRUS_SETUP="$CURRENT_DIR/hardening/antivirus/antivirus.sh"
 KERNEL_NETWORK_HARDENING_CONF="$CURRENT_DIR/hardening/network/99-hardening.conf"
+
 FAIL2BAN_CONF_DIR="${CURRENT_DIR}/hardening/fail2ban"
 APT_CONF_DIR="/etc/apt/apt.conf.d"
+
 BACKUP_DIR="/var/backups/hardening_suite"
 BACKUP_ARCHIVE="${BACKUP_DIR}/system_hardening_initial_state.tar.gz"
 
@@ -58,6 +62,8 @@ create_initial_backup() {
         "/etc/clamav"
         "/etc/chkrootkit.conf"
         "/etc/cron.daily"
+        "/etc/resolv.conf"           
+        "/etc/systemd/resolved.conf.d"
     )
 
     local existing_paths=()
@@ -87,7 +93,7 @@ restore_backup() {
 
     print_separator
     msg_warn "RESTORE INITIAL CONFIGURATION"
-    msg_warn "This will overwrite current SSH, Firewall, Umask, Sysctl, and system settings"
+    msg_warn "This will overwrite current SSH, Firewall, DNS, Umask, Sysctl, and system settings"
     msg_warn "with the initial state saved on the first execution."
     print_separator
 
@@ -97,6 +103,9 @@ restore_backup() {
         msg_info "Restore operation cancelled by user."
         return 0
     fi
+
+    # Quad9 DNS avoid permission error
+    chattr -i /etc/resolv.conf 2>/dev/null || true
 
     msg_info "1/6 Restoring configuration files from initial backup archive..."
     tar -xzf "$BACKUP_ARCHIVE" -C / 2>/dev/null || true
@@ -160,6 +169,9 @@ restore_backup() {
     rm -f /etc/cron.daily/chkrootkit 2>/dev/null || true
     rm -f /var/log/lynis-cron.log /var/log/chkrootkit.log 2>/dev/null || true
 
+    # Quad9 DNS removal
+    rm -f /etc/systemd/resolved.conf.d/quad9.conf 2>/dev/null || true
+
     if [[ -n "${SYSCTL_DIR:-}" && -n "${KERNEL_NETWORK_HARDENING_CONF:-}" ]]; then
         local conf_filename="${KERNEL_NETWORK_HARDENING_CONF##*/}"
         rm -f "${SYSCTL_DIR}/${conf_filename}" 2>/dev/null || true
@@ -170,8 +182,14 @@ restore_backup() {
         mount -o remount,defaults /dev/shm 2>/dev/null || true
     fi
 
-    msg_info "6/6 Reloading sysctl parameters and bootloader..."
+    msg_info "6/6 Reloading sysctl parameters, DNS, and bootloader..."
     sysctl --system &>/dev/null || true
+
+    # REINICIAR RESOLVED PARA VOLVER AL DNS POR DEFECTO
+    if systemctl is-active --quiet systemd-resolved 2>/dev/null || systemctl is-enabled --quiet systemd-resolved 2>/dev/null; then
+        msg_info "Restarting systemd-resolved to restore default DNS settings..."
+        systemctl restart systemd-resolved 2>/dev/null || true
+    fi
 
     if [[ -f /etc/default/grub ]]; then
         if command -v update-grub &>/dev/null; then
@@ -337,6 +355,21 @@ apply_ufw_rules() {
         msg_warn "File UFW_RULES not found at path: ${UFW_RULES:-}"
     fi
 }
+
+setup_quad9_dns() {
+    if [[ -f "${QUAD9_DNS:-}" ]]; then
+        msg_info "Loading Quad9 DNS module..."
+        if source "$QUAD9_DNS"; then
+            msg_success "Quad9 DNS module executed successfully."
+        else
+            msg_error "Failed to execute Quad9 DNS script at: $QUAD9_DNS"
+            return 1
+        fi
+    else
+        msg_warn "Quad9 DNS script not found at path: ${QUAD9_DNS:-}"
+    fi
+}
+
 
 setup_unattended_upgrades() {
     local os_distro="$1"
@@ -866,6 +899,9 @@ run_all_tasks() {
     apply_ufw_rules || msg_warn "UFW / sysctl rules application skipped or failed."
     print_separator
 
+    setup_quad9_dns || msg_warn "Quad9 DNS setup encountered issues."
+    print_separator
+
     apply_hardware_hardening "$package_manager" || msg_warn "Hardware hardening skipped or failed."
     print_separator
 
@@ -890,10 +926,8 @@ run_all_tasks() {
     setup_usbguard "$package_manager" || msg_warn "USBGuard setup encountered issues."
     print_separator
 
-
     msg_success "Full hardening pipeline completed successfully."
 }
-
 show_interactive_menu() {
     local package_manager="$1"
     local os_distribution="$2"
@@ -903,32 +937,33 @@ show_interactive_menu() {
         print_banner "$os_distribution" "$package_manager"
 
         echo -e "${yellowColour}[MODULE SELECTION MENU]${endColour}"
-        echo -e " 1) ${greenColour}Full Deployment      -> Execute all configuration modules sequentially${endColour}"
+        echo -e " 1) ${greenColour}Full Deployment${endColour}      -> Execute all configuration modules sequentially"
         echo -e " 2) ${cyanColour}System Update${endColour}        -> Repositories synchronization, full-upgrade & cache cleanup"
         echo -e " 3) ${cyanColour}Essential Tools${endColour}      -> CLI diagnostics (btop, htop, iotop, jq, ripgrep, eza, etc.)"
         echo -e " 4) ${cyanColour}Time Sync & TZ${endColour}       -> Chrony NTP daemon setup & interactive timezone selection"
         echo -e " 5) ${cyanColour}Auto-Upgrades${endColour}        -> Unattended security updates (Debian/Ubuntu only)"
         echo -e " 6) ${cyanColour}Fail2ban Service${endColour}     -> Bruteforce protection & custom SSH jail policies"
         echo -e " 7) ${cyanColour}UFW & Sysctl Net${endColour}     -> Firewall rules application & Network kernel hardening"
-        echo -e " 8) ${cyanColour}Hardware & Memory${endColour}    -> Limits, coredumps, dmesg restriction, swappiness & /dev/shm"
-        echo -e " 9) ${cyanColour}Secure Mounts${endColour}        -> Apply nodev,nosuid,noexec flags to /dev/shm & fstab"
-        echo -e "10) ${cyanColour}Default Umask${endColour}        -> Restrictive file creation permissions (umask 027)"
-        echo -e "11) ${cyanColour}USBGuard Service${endColour}     -> BadUSB protection ${redColour}[⚠️  WARN: May block new USBs]${endColour}"        
-        echo -e "12) ${cyanColour}SSH Hardening${endColour}        -> Disable root login, password auth & enforce key-based access"
-        echo -e "13) ${cyanColour}Unused Services${endColour}      -> Disable Bluetooth, CUPS, Avahi-daemon & ModemManager"
-        echo -e "14) ${cyanColour}AppArmor MAC${endColour}         -> Mandatory Access Control setup, caching & profile enforcement"        
-        echo -e "15) ${cyanColour}Threat Surface Protection${endColour} -> Prepare ClamAV, Lynis auditor, chkrootkit & ClamUI"        
+        echo -e " 8) ${cyanColour}Quad9 DNS Setup${endColour}      -> Malware blocking, DNSSEC & DNS-over-TLS configuration"
+        echo -e " 9) ${cyanColour}Hardware & Memory${endColour}    -> Limits, coredumps, dmesg restriction, swappiness & /dev/shm"
+        echo -e "10) ${cyanColour}Secure Mounts${endColour}        -> Apply nodev,nosuid,noexec flags to /dev/shm & fstab"
+        echo -e "11) ${cyanColour}Default Umask${endColour}        -> Restrictive file creation permissions (umask 027)"
+        echo -e "12) ${cyanColour}USBGuard Service${endColour}     -> BadUSB protection ${redColour}[⚠️  WARN: May block new USBs]${endColour}"        
+        echo -e "13) ${cyanColour}SSH Hardening${endColour}        -> Disable root login, password auth & enforce key-based access"
+        echo -e "14) ${cyanColour}Unused Services${endColour}      -> Disable Bluetooth, CUPS, Avahi-daemon & ModemManager"
+        echo -e "15) ${cyanColour}AppArmor MAC${endColour}         -> Mandatory Access Control setup, caching & profile enforcement"        
+        echo -e "16) ${cyanColour}Threat Surface Protection${endColour} -> Prepare ClamAV, Lynis auditor, chkrootkit & ClamUI"        
        
        if [[ -f "$BACKUP_ARCHIVE" ]]; then
-            echo -e "16) ${purpleColour}Restore Backup${endColour}       -> ${greenColour}[Backup Available]${endColour} Revert system to initial state"
+            echo -e "17) ${purpleColour}Restore Backup${endColour}       -> ${greenColour}[Backup Available]${endColour} Revert system to initial state"
         else
-            echo -e "16) ${purpleColour}Restore Backup${endColour}       -> ${grayColour}[No Backup Found]${endColour} Revert system to initial state"
+            echo -e "17) ${purpleColour}Restore Backup${endColour}       -> ${grayColour}[No Backup Found]${endColour} Revert system to initial state"
         fi
 
-        echo -e "17) ${redColour}Exit${endColour}                 -> Terminate execution"
+        echo -e "18) ${redColour}Exit${endColour}                 -> Terminate execution"
         print_separator
 
-        read -rp "Select an option [1-17]: " choice
+        read -rp "Select an option [1-18]: " choice
 
         print_separator
         case "$choice" in
@@ -961,42 +996,46 @@ show_interactive_menu() {
                 read -rp "Press [ENTER] to return to menu..."
                 ;;
             8)
-                apply_hardware_hardening "$package_manager"
+                setup_quad9_dns
                 read -rp "Press [ENTER] to return to menu..."
                 ;;
             9)
-                setup_secure_mounts
+                apply_hardware_hardening "$package_manager"
                 read -rp "Press [ENTER] to return to menu..."
                 ;;
             10)
-                setup_umask
+                setup_secure_mounts
                 read -rp "Press [ENTER] to return to menu..."
                 ;;
             11)
-                setup_usbguard "$package_manager"
+                setup_umask
                 read -rp "Press [ENTER] to return to menu..."
                 ;;
             12)
-                setup_ssh_hardening "$package_manager"
+                setup_usbguard "$package_manager"
                 read -rp "Press [ENTER] to return to menu..."
                 ;;
             13)
-                disable_unused_services
+                setup_ssh_hardening "$package_manager"
                 read -rp "Press [ENTER] to return to menu..."
                 ;;
             14)
-                setup_apparmor "$package_manager"
+                disable_unused_services
                 read -rp "Press [ENTER] to return to menu..."
                 ;;
             15)
-                install_antivirus "$package_manager"
+                setup_apparmor "$package_manager"
                 read -rp "Press [ENTER] to return to menu..."
                 ;;
             16)
-                restore_backup
+                install_antivirus "$package_manager"
                 read -rp "Press [ENTER] to return to menu..."
                 ;;
             17)
+                restore_backup
+                read -rp "Press [ENTER] to return to menu..."
+                ;;
+            18)
                 msg_info "Exiting setup suite."
                 exit 0
                 ;;
@@ -1007,6 +1046,7 @@ show_interactive_menu() {
         esac
     done
 }
+
 
 main() {
     if [[ $(uname -s) != "Linux" ]]; then
