@@ -118,3 +118,29 @@ print_section() {
     echo -e "${cyanColour}  :: ${title}${endColour}"
     echo -e "${cyanColour}======================================================================${endColour}\n"
 }
+
+check_root() {
+    if [[ $EUID -ne 0 ]]; then
+        msg_error "This script requires root privileges. Please run with sudo."
+        exit 1
+    fi
+}
+
+command_exists() {
+    command -v "$1" >/dev/null 2>&1
+}
+
+prompt_confirmation() {
+    local prompt_msg="$1"
+    local default_ans="${2:-N}"
+    local response
+    
+    read -rp "$(echo -e "${yellowColour}[?] ${prompt_msg} [y/N]: ${endColour}")" response
+    response="${response:-$default_ans}"
+    
+    if [[ ! "$response" =~ ^[Yy]$ ]]; then
+        msg_info "Operation cancelled by user."
+        return 1
+    fi
+    return 0
+}
