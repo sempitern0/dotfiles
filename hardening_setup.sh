@@ -21,15 +21,15 @@ BACKUP_ARCHIVE="${BACKUP_DIR}/system_hardening_initial_state.tar.gz"
 print_banner() {
     echo -e "${cyanColour}"
     cat << "EOF"
- ██████╗ ███████╗██████╗ ███████╗██████╗ ██╗███╗   ██╗██████╗ 
-██╔════╝ ██╔════╝██╔══██╗██╔════╝██╔══██╗██║████╗  ██║██╔════╝ 
-██║  ███╗█████╗  ██████╔╝███████╗██████╔╝██║██╔██╗ ██║██║  ███╗
-██║   ██║██╔══╝  ██╔══██╗╚════██║██╔═══╝ ██║██║╚██╗██║██║   ██║
-╚██████╔╝███████╗██║  ██║███████║██║     ██║██║ ╚████║╚██████╔╝
- ╚═════╝ ╚══════╝╚═╝  ╚═╝╚══════╝╚═╝     ╚═╝╚═╝  ╚═══╝ ╚═════╝ 
+  .---.   ██╗  ██╗ █████╗ ██████╗ ██████╗ 
+ /  |  \  ██║  ██║██╔══██╗██╔══██╗██╔══██╗
+|   |   | ███████║███████║██████╔╝██║  ██║
+ \  |  /  ██╔══██║██╔══██║██╔══██╗██║  ██║
+  '---'   ██║  ██║██║  ██║██║  ██║██████╔╝
+          ╚═╝  ╚═╝╚═╝  ╚═╝╚═╝  ╚═╝╚═════╝ 
 EOF
     echo -e "${endColour}"
-    echo -e "${purpleColour}=== System Hardening & Setup Suite ===${endColour}"
+    echo -e "${purpleColour}=== System Hardening & Security Suite ===${endColour}"
     echo -e "${grayColour}OS Family: ${endColour}${cyanColour}${1:-Unknown}${endColour} | ${grayColour}Package Manager: ${endColour}${cyanColour}${2:-Unknown}${endColour}"
     print_separator
 }
@@ -55,6 +55,9 @@ create_initial_backup() {
         "/etc/fail2ban"
         "/etc/usbguard"
         "/etc/apt/apt.conf.d"
+        "/etc/clamav"
+        "/etc/chkrootkit.conf"
+        "/etc/cron.daily"
     )
 
     local existing_paths=()
@@ -106,6 +109,10 @@ restore_backup() {
         "chrony"
         "chronyd"
         "unattended-upgrades"
+        "clamav-freshclam"
+        "clamav-daemon"
+        "freshclam"
+        "clamd"
     )
 
     for svc in "${services_to_disable[@]}"; do
@@ -143,18 +150,21 @@ restore_backup() {
         fi
     done
 
-    msg_info "4/6 Removing custom drop-in profiles and configuration files..."
+    msg_info "4/6 Removing custom drop-in profiles, cron jobs, and log files..."
     rm -f /etc/profile.d/umask.sh 2>/dev/null || true
+    rm -f /etc/ssh/sshd_config.d/00-hardening.conf 2>/dev/null || true
     rm -f /etc/ssh/sshd_config.d/99-hardening.conf 2>/dev/null || true
     rm -f /etc/fail2ban/jail.local /etc/fail2ban/jail.d/ssh.local 2>/dev/null || true
     rm -f /etc/usbguard/rules.conf 2>/dev/null || true
+    rm -f /etc/cron.daily/lynis-audit 2>/dev/null || true
+    rm -f /etc/cron.daily/chkrootkit 2>/dev/null || true
+    rm -f /var/log/lynis-cron.log /var/log/chkrootkit.log 2>/dev/null || true
 
     if [[ -n "${SYSCTL_DIR:-}" && -n "${KERNEL_NETWORK_HARDENING_CONF:-}" ]]; then
         local conf_filename="${KERNEL_NETWORK_HARDENING_CONF##*/}"
         rm -f "${SYSCTL_DIR}/${conf_filename}" 2>/dev/null || true
     fi
 
-    # 5. Restablecer /dev/shm a las opciones por defecto
     msg_info "5/6 Resetting mount permissions for /dev/shm..."
     if mountpoint -q /dev/shm; then
         mount -o remount,defaults /dev/shm 2>/dev/null || true
@@ -877,13 +887,14 @@ run_all_tasks() {
     setup_apparmor "$package_manager" || msg_warn "AppArmor setup completed with warnings."
     print_separator
 
-    setup_usbguard "$package_manager" || msg_warn "USBGuard setup encountered issues."
-    print_separator
-
     install_antivirus "$package_manager" || msg_warn "Antivirus installation encountered issues."   
     print_separator
 
-    msg_success "Full deployment pipeline completed successfully."
+    setup_usbguard "$package_manager" || msg_warn "USBGuard setup encountered issues."
+    print_separator
+
+
+    msg_success "Full hardening pipeline completed successfully."
 }
 
 show_interactive_menu() {
