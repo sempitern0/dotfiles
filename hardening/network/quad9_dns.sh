@@ -7,14 +7,15 @@ configure_quad9_dns() {
     local resolved_dir="/etc/systemd/resolved.conf.d"
     local resolved_conf="${resolved_dir}/quad9.conf"
 
-    # 1. Si systemd-resolved está activo, se configura a través del demonio
+    # 1. Configuración principal mediante systemd-resolved
     if systemctl is-active --quiet systemd-resolved 2>/dev/null || systemctl is-enabled --quiet systemd-resolved 2>/dev/null; then
         mkdir -p "$resolved_dir"
         
         cat << 'EOF' > "$resolved_conf"
 [Resolve]
-DNS=9.9.9.9 149.112.112.112 2620:fe::fe 2620:fe::9
-FallbackDNS=9.9.9.10 149.112.112.10 2620:fe::10 2620:fe::fe:10
+# Direcciones Quad9 Recomendadas (con validación SNI para DoT)
+DNS=9.9.9.9#dns.quad9.net 149.112.112.112#dns.quad9.net 2620:fe::fe#dns.quad9.net 2620:fe::9#dns.quad9.net
+FallbackDNS=9.9.9.10#dns.quad9.net 149.112.112.10#dns.quad9.net 2620:fe::10#dns.quad9.net 2620:fe::fe:10#dns.quad9.net
 DNSOverTLS=yes
 DNSSEC=yes
 EOF
@@ -27,24 +28,22 @@ EOF
         fi
     fi
 
-    # 2. Fallback: Edición directa de /etc/resolv.conf si systemd-resolved no está activo
+    # 2. Fallback: Edición directa de /etc/resolv.conf
     msg_warn "systemd-resolved not active. Applying Quad9 directly to /etc/resolv.conf..."
 
     if [[ -f /etc/resolv.conf ]]; then
-        # Desproteger si tenía el atributo inmutable de una ejecución previa
         chattr -i /etc/resolv.conf 2>/dev/null || true
         
         cp /etc/resolv.conf "/etc/resolv.conf.bak.$(date +%F_%T)"
         
         cat << 'EOF' > /etc/resolv.conf
-# Configured by Hardening Script - Quad9 DNS
+# Configured by Hardening Script - Quad9 DNS Recommended (No ECS)
 nameserver 9.9.9.9
 nameserver 149.112.112.112
 nameserver 2620:fe::fe
 nameserver 2620:fe::9
 EOF
 
-        # Proteger contra modificación externa
         chattr +i /etc/resolv.conf 2>/dev/null || true
         msg_success "Quad9 DNS applied directly to /etc/resolv.conf (Immutable)."
     else
