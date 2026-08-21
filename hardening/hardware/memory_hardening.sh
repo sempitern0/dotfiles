@@ -1,5 +1,7 @@
 #!/usr/bin/env bash
-set -euo pipefail
+# =========================================================================
+# MODULE: HARDWARE & MEMORY HARDENING
+# =========================================================================
 
 SYSCTL_DIR="/etc/sysctl.d"
 
@@ -29,45 +31,49 @@ configure_resource_limits() {
 setup_process_accounting() {
     local package_manager="$1"
 
-    msg_info "Setting up process accounting service..."
+    msg_info "Setting up process accounting service (acct)..."
 
     case "$package_manager" in
         apt)
-            apt install -y acct
-            systemctl enable --now acct
+            apt install -y -qq acct &>/dev/null
+            systemctl enable --now acct &>/dev/null
             msg_success "Process accounting (acct) installed and enabled."
             ;;
         pacman)
             if pacman -Si acct &>/dev/null; then
-                pacman -S --needed --noconfirm acct
+                pacman -S --needed --noconfirm acct &>/dev/null
                 mkdir -p /var/account
                 touch /var/account/pacct
-                systemctl enable --now acct
+                systemctl enable --now acct &>/dev/null
                 msg_success "Process accounting (acct) installed and enabled."
             else
                 msg_warn "Package 'acct' not found in pacman repositories. Skipping."
             fi
             ;;
+        *)
+            msg_warn "Unsupported package manager for acct setup."
+            ;;
     esac
 }
 
-# Shared memory hardening in /etc/fstab
+# Shared memory hardening in /etc/fstab (CIS Standard)
 secure_shared_memory() {
     local fstab_file="/etc/fstab"
-    local shm_entry="tmpfs /dev/shm tmpfs defaults,noexec,nosuid 0 0"
+    local shm_entry="tmpfs /dev/shm tmpfs defaults,noexec,nosuid,nodev 0 0"
 
     msg_info "Securing shared memory mount point (/dev/shm)..."
 
     if ! grep -qs "/dev/shm" "$fstab_file"; then
         echo "$shm_entry" >> "$fstab_file"
-        msg_success "Added /dev/shm entry to $fstab_file."
+        msg_success "Added /dev/shm entry to $fstab_file with noexec,nosuid,nodev."
     else
-        msg_info "Entry /dev/shm already present in $fstab_file."
+        # If it exists but lacks our secure flags, sed could be used, but for safety we warn
+        msg_info "Entry /dev/shm already present in $fstab_file (verify flags manually)."
     fi
 
     if mountpoint -q /dev/shm 2>/dev/null || [[ -d /dev/shm ]]; then
-        mount -o remount,noexec,nosuid /dev/shm 2>/dev/null || true
-        msg_success "Remounted /dev/shm with noexec,nosuid."
+        mount -o remount,noexec,nosuid,nodev /dev/shm 2>/dev/null || true
+        msg_success "Remounted /dev/shm with strict permissions."
     fi
 }
 
@@ -83,6 +89,7 @@ disable_suid_coredumps() {
     msg_success "Disabled SUID core dumps via $sysctl_conf."
 }
 
+# Restrict dmesg kernel buffer
 restrict_dmesg() {
     local sysctl_conf="$SYSCTL_DIR/99-dmesg-restrict.conf"
 
@@ -94,6 +101,7 @@ restrict_dmesg() {
     msg_success "Restricted dmesg access (kernel.dmesg_restrict = 1)."
 }
 
+# Dynamic swap and VFS cache optimization
 setup_dynamic_swap() {
     msg_info "Checking memory capacity and existing swap space..."
 
@@ -129,44 +137,62 @@ setup_dynamic_swap() {
     fi
 
     msg_info "Optimizing virtual memory kernel parameters..."
-    sysctl -w vm.swappiness=10 &>/dev/null
-    sysctl -w vm.vfs_cache_pressure=50 &>/dev/null
-
+    
     cat << 'EOF' > /etc/sysctl.d/99-swap-optimization.conf
 vm.swappiness=10
 vm.vfs_cache_pressure=50
 EOF
     chmod 644 /etc/sysctl.d/99-swap-optimization.conf
+    sysctl -p /etc/sysctl.d/99-swap-optimization.conf &>/dev/null || sysctl --system &>/dev/null
+    
     msg_success "Swappiness (10) and cache pressure (50) configured persistently."
 }
 
+# Module blacklisting and advanced protections
 setup_memory_protections() {
-local hardware_dir="${CURRENT_DIR}/hardware"
+    local hardware_dir="${CURRENT_DIR:-.}/hardware"
+    local blacklist_file="/etc/modprobe.d/block-unneeded.conf"
 
-if [[ -f "${hardware_dir}/block-unneeded.conf" ]]; then
-    msg_info "Deploying kernel module blacklist to /etc/modprobe.d/..."
-    cp "${hardware_dir}/block-unneeded.conf" /etc/modprobe.d/block-unneeded.conf
-    chmod 644 /etc/modprobe.d/block-unneeded.conf
-    msg_success "Blocked unneeded kernel modules successfully."
-else
-    msg_warn "File ${hardware_dir}/block-unneeded.conf not found. Skipping module blacklist."
-fi
-
-if [[ -f "${hardware_dir}/99-security-advanced.conf" ]]; then
-    msg_info "Deploying 99-security-advanced.conf to /etc/sysctl.d/..."
-    cp "${hardware_dir}/99-security-advanced.conf" /etc/sysctl.d/99-security-advanced.conf
-    chmod 644 /etc/sysctl.d/99-security-advanced.conf
+    msg_info "Evaluating kernel module blacklist..."
     
-    msg_info "Reloading sysctl parameters..."
-    sysctl --system &>/dev/null || true
-    msg_success "Advanced sysctl hardening reloaded successfully."
-else
-    msg_warn "File ${hardware_dir}/99-security-advanced.conf not found. Skipping advanced sysctl."
-fi
+    if [[ -f "${hardware_dir}/block-unneeded.conf" ]]; then
+        cp "${hardware_dir}/block-unneeded.conf" "$blacklist_file"
+        chmod 644 "$blacklist_file"
+        msg_success "Copied custom module blacklist from ${hardware_dir}."
+    else
+        msg_info "Custom blacklist not found. Generating default security blacklist..."
+        cat << 'EOF' > "$blacklist_file"
+# Block uncommon network protocols (Reduces attack surface)
+install dccp /bin/true
+install sctp /bin/true
+install rds /bin/true
+install tipc /bin/true
+# Block uncommon filesystems (Prevents malicious USB mounts)
+install cramfs /bin/true
+install freevxfs /bin/true
+install jffs2 /bin/true
+install hfs /bin/true
+install hfsplus /bin/true
+EOF
+        chmod 644 "$blacklist_file"
+        msg_success "Default kernel module blacklist applied."
+    fi
+
+    if [[ -f "${hardware_dir}/99-security-advanced.conf" ]]; then
+        msg_info "Deploying 99-security-advanced.conf to /etc/sysctl.d/..."
+        cp "${hardware_dir}/99-security-advanced.conf" /etc/sysctl.d/99-security-advanced.conf
+        chmod 644 /etc/sysctl.d/99-security-advanced.conf
+        
+        sysctl --system &>/dev/null || true
+        msg_success "Advanced sysctl hardening reloaded successfully."
+    fi
 }
 
+# Main wrapper function
 apply_process_memory_hardening() {
     local package_manager="$1"
+
+    msg_info "=== STARTING HARDWARE & MEMORY HARDENING ==="
 
     configure_resource_limits
     print_separator
@@ -184,5 +210,9 @@ apply_process_memory_hardening() {
     print_separator
 
     setup_dynamic_swap
-}
+    print_separator
 
+    setup_memory_protections 
+
+    msg_success "Hardware and memory hardening applied successfully."
+}

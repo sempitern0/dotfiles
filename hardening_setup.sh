@@ -613,6 +613,7 @@ setup_apparmor() {
     msg_success "AppArmor configuration completed successfully."
 }
 
+
 setup_ssh_hardening() {
     local package_manager="$1"
     local main_sshd_conf="/etc/ssh/sshd_config"
