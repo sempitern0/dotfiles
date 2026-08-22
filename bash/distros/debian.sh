@@ -10,10 +10,10 @@ PPA_REPOS=(
 
 # Essential CLI tools for all environments
 PACKAGES=(
-    coreutils man-db ntpsec curl wget inetutils-traceroute net-tools 
-    apt-transport-https vim git software-properties-common 
-    ca-certificates tree htop iftop bat lynis chkrootkit 
-    nmap whatweb fzf ripgrep jq fastfetch
+    coreutils man-db man-pages curl wget ca-certificates tree vim git
+    htop iftop bat fastfetch jq fzf ripgrep
+    inetutils-traceroute net-tools nmap lynis chkrootkit whatweb
+    bluez bluez-utils bluez-deprecated-tools ntpsec software-properties-common
 )
 
 # Graphical tools (Only installed on desktops)
