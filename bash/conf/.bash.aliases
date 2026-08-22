@@ -1,66 +1,118 @@
-alias refresh='source ~/.bashrc'
+# ~/.bash.aliases - Modernized & Hardened
 
+# --- Shell & Navigation ---
+alias refresh='source ~/.bashrc'
+alias path='echo "$PATH" | tr ":" "\n"'
 alias da='date "+%Y-%m-%d %A %T %Z"'
-alias ll='ls -lahF'
-alias la='ls -'
-alias l='ls -CF'
-alias lt='ls --human-readable --size -1 -S --classify'
-alias mkdir='mkdir -pv'
-alias mktemp='mktemp -dv'
-alias path='echo -e ${PATH//:/\\n}'
 alias +x='chmod +x'
 
-# Batcat it's an external package that needs to be installed
-alias bat='batcat'
-alias fzf="fzf --preview 'bat --style=numbers --color=always --line-range :500 {}'"
+# Allow sudo to expand aliases (e.g., 'sudo ll')
+alias sudo='sudo '
 
-# Add an "alert" alias for long running commands.  Use like so:
-#   sleep 10; alert
-alias alert='notify-send --urgency=low -i "$([ $? = 0 ] && echo terminal || echo error)" "$(history|tail -n1|sed -e '\''s/^\s*[0-9]\+\s*//;s/[;&|]\s*alert$//'\'')"'
+# File listing (Uses eza/lsd if available; fallback to enhanced ls)
+if command -v eza >/dev/null 2>&1; then
+    alias ls='eza --icons=auto'
+    alias ll='eza -lhF --git --group-directories-first'
+    alias la='eza -lahF --git --group-directories-first'
+    alias l='eza -CF'
+    alias lt='eza -lhF -s=size --group-directories-first'
+    alias tree='eza --tree --icons=auto'
+elif command -v lsd >/dev/null 2>&1; then
+    alias ls='lsd'
+    alias ll='lsd -l'
+    alias la='lsd -a'
+    alias l='lsd -CF'
+    alias lt='lsd -l --total-size'
+    alias tree='lsd --tree'
+else
+    alias ls='ls --color=auto'
+    alias ll='ls -lahF --group-directories-first'
+    alias la='ls -A'
+    alias l='ls -CF'
+    alias lt='ls -lhS --group-directories-first'
+    alias tree='tree -CAhF --dirsfirst'
+    alias treed='tree -CAFd'
+fi
 
-# Hardware and networking utilities
-alias topcpu="/bin/ps -eo pcpu,pid,user,args | sort -k 1 -r | head -10"
-alias openports='netstat -nape --inet'
-alias ports='netstat -tulanp'
+# Verbose directory and temp creation
+alias mkdir='mkdir -pv'
+alias mktemp='mktemp -dv'
+
+# --- External Tools (Bat / FZF / Kitty) ---
+# Transparent compatibility for bat / batcat
+if command -v batcat >/dev/null 2>&1; then
+    alias bat='batcat'
+    _BAT_CMD="batcat"
+elif command -v bat >/dev/null 2>&1; then
+    _BAT_CMD="bat"
+fi
+
+if [ -n "${_BAT_CMD:-}" ]; then
+    alias fzf="fzf --preview '$_BAT_CMD --style=numbers --color=always --line-range :500 {}'"
+fi
+
+alias icat='kitty +kitten icat'
+
+# --- Networking & Ports (Modern netstat replacement) ---
+alias openports='ss -tulpn'
 alias listen='ss -tulnp'
 alias netcon="ss -ntu | awk '{print \$5}' | cut -d: -f1 | sort | uniq -c | sort -nr"
-alias myip="curl -s https://ifconfig.me; echo '' && ip -br -4 addr"
+alias myip="curl -s https://ifconfig.me; echo ''; ip -brief -4 address"
 alias curltime='curl -o /dev/null -s -w "Connect: %{time_connect}s\nTTFB: %{time_starttransfer}s\nTotal: %{time_total}s\nStatus: %{http_code}\n"'
+
+# User-Agent Helpers
 alias nmaph='nmap --script-args http.useragent="$CHROME_DESKTOP_AGENT"'
 alias wpscanh='wpscan --ua "$FIREFOX_DESKTOP_AGENT"'
 alias curlh='curl -A "$EDGE_DESKTOP_AGENT"'
 alias wgeth='wget -U "$ANDROID_MOBILE_AGENT"'
 
+# --- Hardware, Disk & Processes ---
+alias topcpu="ps aux --sort=-%cpu | head -n 11"
+alias topmem="ps aux --sort=-%mem | head -n 11"
 alias devices="lsblk -f"
 alias devicess="lshw -short"
-alias diskspace="du -S | sort -n -r |more"
-alias folders='du -h --max-depth=1'
-alias folderssort='find . -maxdepth 1 -type d -print0 | xargs -0 du -sk | sort -rn'
 alias cpuinfo="less /proc/cpuinfo"
 alias meminfo='free -h'
 
-alias dropcache='sudo sync; echo 3 | sudo tee /proc/sys/vm/drop_caches'
-alias failed='systemctl --failed'
-alias startall='systemctl start --all'
-alias stopall='systemctl stop --all'
+# df/du replacement if duf is available
+if command -v duf >/dev/null 2>&1; then
+    alias mountedinfo='duf'
+else
+    alias mountedinfo='df -hT'
+fi
 
-## Tree is an external package that needs to be installed
-alias tree='tree -CAhF --dirsfirst'
-alias treed='tree -CAFd'
-alias mountedinfo='df -hT'
-alias mnt="mount | awk -F' ' '{ printf \"%s\t%s\n\",\$1,\$3; }' | column -t | egrep ^/dev/ | sort"
+alias mnt='findmnt -t ext4,btrfs,xfs,zfs,ntfs,vfat'
+alias folders='du -h --max-depth=1 | sort -hr'
+alias folderssort='du -sh ./* 2>/dev/null | sort -hr'
 alias usage='du -ch | grep total'
 alias totalusage='df -hl --total | grep total'
 
-alias logs="sudo find /var/log -type f -exec file {} \; | grep 'text' | cut -d' ' -f1 | sed -e's/:$//g' | grep -v '[0-9]$' | xargs tail -f"
-
+# --- File Operations & Cleanup ---
 alias count='find . -type f | wc -l'
+
+# cpv /ruta/archivo_grande.iso /media/usb/
+# cpv -r carpeta_origen/ /media/backup/
 alias cpv='rsync -ah --info=progress2'
-alias sudo='sudo '
-alias update='sudo apt update && sudo apt upgrade'
+
+alias shredd='shred -uzv -n 10'
+alias dropcache='sudo sync; echo 3 | sudo tee /proc/sys/vm/drop_caches'
+
+# Package manager updates mapped by system type
+if command -v apt >/dev/null 2>&1; then
+    alias update='sudo apt update && sudo apt upgrade'
+    alias cleanapt='sudo apt clean && sudo apt autoremove --purge -y'
+elif command -v pacman >/dev/null 2>&1; then
+    alias update='sudo pacman -Syu'
+    alias cleanpacman='sudo pacman -Scc'
+fi
 
 alias cachefonts='fc-cache -f -v'
-alias icat='kitty +kitten icat'
-alias cleanapt='sudo apt clean -y && sudo apt autoremove -y --purge'
-alias cleanpacman='sudo pacman -Scc'
-alias shredd='shred -uzv -n 10'
+alias logs="journalctl -xf"
+
+# --- Systemd ---
+alias failed='systemctl --failed'
+
+# --- Long-running command alerts ---
+# sudo apt update && sudo apt upgrade -y; alert
+# sleep 30; alert
+alias alert='notify-send --urgency=low -i "$([ $? = 0 ] && echo terminal || echo error)" "$(history|tail -n1|sed -e '\''s/^\s*[0-9]\+\s*//;s/[;&|]\s*alert$//'\'')"'

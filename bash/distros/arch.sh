@@ -14,7 +14,7 @@ CLEANUP_CMD=(
 
 # Essential CLI tools for all environments
 PACKAGES=(
-    coreutils ntp curl wget inetutils traceroute net-tools 
+    coreutils man-db ntp curl wget inetutils traceroute net-tools 
     vim git ca-certificates tree htop iftop bat lynis 
     chkrootkit fastfetch nmap fzf ripgrep jq
 )

@@ -1,98 +1,231 @@
 #!/usr/bin/env bash
+# ~/.bash.functions - Modernized, Multi-platform & Hardened Bash Functions
 
-
-#######################################################
-# SPECIAL FUNCTIONS
-#######################################################
-# Extracts any archive(s) (if unp isn't installed)
-# EXAMPLE: extract fotos.zip documentos.rar notas.txt.gz
-extract() {
-	for archive in "$@"; do
-		if [ -f "$archive" ]; then
-			case $archive in
-			*.tar.bz2) tar xvjf $archive ;;
-			*.tar.gz) tar xvzf $archive ;;
-      *.tar.xz) tar xvJf "$archive" ;;
-			*.bz2) bunzip2 $archive ;;
-			*.rar) rar x $archive ;;
-			*.gz) gunzip $archive ;;
-			*.tar) tar xvf $archive ;;
-			*.tbz2) tar xvjf $archive ;;
-			*.tgz) tar xvzf $archive ;;
-      *.pax) cat $1 | pax -r ;;
-      *.pax.Z) uncompress $1 --stdout | pax -r ;;
-			*.zip) unzip $archive ;;
-			*.Z) uncompress $archive ;;
-			*.7z) 7z x $archive ;;
-      *.xz) xz -d "$archive" ;;
-			*) echo "Don't know how to extract '$archive'..." ;;
-			esac
-		else
-			echo "'$archive' is not a valid file!"
-		fi
-	done
-}
-
-
-
-# Searches for text in all files in the current folder
-ftext() {
-	# -i case-insensitive
-	# -I ignore binary files
-	# -H causes filename to be printed
-	# -r recursive search
-	# -n causes line number to be printed
-	# optional: -F treat search term as a literal, not a regular expression
-	# optional: -l only print filenames and not the matching lines ex. grep -irl "$1" *
-	grep -iIHrn --color=always "$1" . | less -r
-}
-
-toPaste() {
-    if [ -f "$1" ]; then
-        xclip -sel c < "$1"
-        echo "📋 Contenido de '$(basename "$1")' copiado al portapapeles."
+# Internal helper: Copy input stream to system clipboard across OS/environments
+_copy_to_clipboard() {
+    if command -v wl-copy >/dev/null 2>&1; then
+        wl-copy
+    elif command -v xclip >/dev/null 2>&1; then
+        xclip -selection clipboard
+    elif command -v pbcopy >/dev/null 2>&1; then
+        pbcopy
     else
-        echo "❌ Error: El archivo '$1' no existe."
+        cat >/dev/null
+        echo "[-] Error: No supported clipboard tool found (xclip, wl-copy, pbcopy)." >&2
+        return 1
     fi
 }
 
-# Extract nmap information:
+#######################################################
+# ARCHIVE & FILE HANDLING
+#######################################################
 
-extractNmapPorts() {
-if [ ! -f "$1" ]; then
-		echo "File $1 not found"
-		return 1
-	fi
+# Extracts any archive format intelligently
+extract() {
+    if [ $# -eq 0 ]; then
+        echo "Usage: extract <file1> [file2 ...]"
+        return 1
+    fi
 
-	ports="$(cat $1 | grep -oP '\d{1,5}/open' | awk '{print $1}' FS='/' | xargs | tr ' ' ',')";
-	ip_address="$(cat $1 | grep -oP '\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}' | sort -u | head -n 1)"
-	echo -e "\n[*] Extracting information...\n" > extractPorts.tmp
-	echo -e "\t[*] IP Address: $ip_address"  >> extractPorts.tmp
-	echo -e "\t[*] Open ports: $ports\n"  >> extractPorts.tmp
-	echo $ports | tr -d '\n' | xclip -selection clipboard
-	echo -e "[*] Ports copied to clipboard\n"  >> extractPorts.tmp
-	cat extractPorts.tmp; rm extractPorts.tmp
+    for archive in "$@"; do
+        if [ -f "$archive" ]; then
+            case "${archive,,}" in
+                *.tar.bz2 | *.tbz2) tar xvjf "$archive" ;;
+                *.tar.gz | *.tgz)  tar xvzf "$archive" ;;
+                *.tar.xz)          tar xvJf "$archive" ;;
+                *.tar.zst)         tar --zstd -xvf "$archive" ;;
+                *.tar)             tar xvf "$archive" ;;
+                *.bz2)             bunzip2 "$archive" ;;
+                *.rar)             unrar x "$archive" 2>/dev/null || rar x "$archive" ;;
+                *.gz)              gunzip "$archive" ;;
+                *.zip)             unzip "$archive" ;;
+                *.zst)             zstd -d "$archive" ;;
+                *.7z)              7z x "$archive" ;;
+                *.xz)              xz -d "$archive" ;;
+                *)                 echo "[-] Error: '$archive' cannot be extracted via extract()" ;;
+            esac
+        else
+            echo "[-] Error: '$archive' is not a valid file."
+        fi
+    done
 }
 
-# Create a data URL from a file
+# Create a timestamped backup copy of a file or directory
+backup() {
+    if [ ! -e "$1" ]; then
+        echo "[-] Error: Target '$1' does not exist."
+        return 1
+    fi
+    local target="$1.bak.$(date +%Y%m%d_%H%M%S)"
+    cp -r "$1" "$target" && echo "[+] Backup created: $target"
+}
+
+# Copy file content directly to system clipboard
+topaste() {
+    if [ -f "$1" ]; then
+        _copy_to_clipboard < "$1" && echo "📋 Content of '$(basename "$1")' copied to clipboard."
+    else
+        echo "❌ Error: File '$1' does not exist."
+        return 1
+    fi
+}
+
+# Create a Base64 Data URL from a file
 dataurl() {
-	local mimeType
-	mimeType=$(file -b --mime-type "$1")
-	if [[ $mimeType == text/* ]]; then
-		mimeType="${mimeType};charset=utf-8"
-	fi
-	echo "data:${mimeType};base64,$(openssl base64 -in "$1" | tr -d '\n')"
+    if [ ! -f "$1" ]; then
+        echo "[-] Error: File '$1' not found."
+        return 1
+    fi
+
+    local mime_type
+    mime_type=$(file -b --mime-type "$1")
+    if [[ $mime_type == text/* ]]; then
+        mime_type="${mime_type};charset=utf-8"
+    fi
+
+    local b64
+    if command -v openssl >/dev/null 2>&1; then
+        b64=$(openssl base64 -in "$1" | tr -d '\r\n')
+    else
+        b64=$(base64 -w 0 "$1" 2>/dev/null || base64 "$1" | tr -d '\r\n')
+    fi
+
+    echo "data:${mime_type};base64,${b64}"
 }
 
-digg() {
-	dig +nocmd "$1" any +multiline +noall +answer
+#######################################################
+# NAVIGATION & SEARCH
+#######################################################
+
+# Create directory and enter it immediately
+mkcd() {
+    if [ -z "$1" ]; then
+        echo "Usage: mkcd <directory_path>"
+        return 1
+    fi
+    mkdir -p "$1" && cd "$1" || return
 }
 
+# Navigate up N directories in the tree
+up() {
+    local limit="${1:-1}"
+    if ! [[ "$limit" =~ ^[0-9]+$ ]]; then
+        echo "[-] Error: Argument must be a positive integer."
+        return 1
+    fi
+    local d=""
+    for ((i=1; i<=limit; i++)); do
+        d="../$d"
+    done
+    cd "$d" || return
+}
 
-# `tre` is a shorthand for `tree` with hidden files and color enabled, ignoring
-# the `.git` directory, listing directories first. The output gets piped into
-# `less` with options to preserve color and line numbers, unless the output is
-# small enough for one screen.
+# Fast recursive text search using ripgrep, ag, or grep
+ftext() {
+    if [ -z "$1" ]; then
+        echo "Usage: ftext <search_term>"
+        return 1
+    fi
+
+    if command -v rg >/dev/null 2>&1; then
+        rg -i --heading --line-number --color=always "$1" | less -r
+    elif command -v ag >/dev/null 2>&1; then
+        ag -i --color "$1" | less -r
+    else
+        grep -iIHrn --color=always "$1" . | less -r
+    fi
+}
+
+# Tree output rendered with color and less paging
 tre() {
-	tree -aC -I '.git' --dirsfirst "$@" | less -FRNX
+    if command -v eza >/dev/null 2>&1; then
+        eza --tree --icons=auto --ignore-glob=".git" "$@" | less -FRNX
+    else
+        tree -aC -I '.git' --dirsfirst "$@" | less -FRNX
+    fi
+}
+
+#######################################################
+# NETWORKING & SECURITY
+#######################################################
+
+# Extract IP address and open ports from Nmap output into clipboard
+extractNmapPorts() {
+    if [ ! -f "$1" ]; then
+        echo "[-] Error: File '$1' not found."
+        return 1
+    fi
+
+    local ip_address ports
+    ip_address=$(grep -oP '\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}' "$1" | sort -u | head -n 1)
+    ports=$(grep -oP '\d{1,5}/open' "$1" | awk -F'/' '{print $1}' | xargs | tr ' ' ',')
+
+    if [ -z "$ports" ]; then
+        echo "[-] No open ports found in $1"
+        return 1
+    fi
+
+    echo -e "\n[*] Extracted Target Information:"
+    echo -e "    [+] IP Address: ${ip_address:-Unknown}"
+    echo -e "    [+] Open Ports: ${ports}\n"
+
+    echo -n "$ports" | _copy_to_clipboard
+    echo "[*] Open ports copied to clipboard!"
+}
+
+# Concise DNS lookup for all record types
+digg() {
+    if [ -z "$1" ]; then
+        echo "Usage: digg <domain>"
+        return 1
+    fi
+    dig +nocmd "$1" any +multiline +noall +answer
+}
+
+# Fetch geolocation info for an IP address or domain
+ipinfo() {
+    local target="${1:-me}"
+    curl -s "https://ipapi.co/${target}/json/" | grep -E '"ip"|"city"|"region"|"country_name"|"org"'
+}
+
+# Quick local HTTP server on a specified port (default: 8000)
+server() {
+    local port="${1:-8000}"
+    if command -v python3 >/dev/null 2>&1; then
+        echo "[+] Serving HTTP on 0.0.0.0 port $port..."
+        python3 -m http.server "$port"
+    elif command -v php >/dev/null 2>&1; then
+        echo "[+] Serving HTTP on 0.0.0.0 port $port..."
+        php -S "0.0.0.0:$port"
+    else
+        echo "[-] Error: Neither Python 3 nor PHP is installed."
+        return 1
+    fi
+}
+
+#######################################################
+# SYSTEM & UTILITIES
+#######################################################
+
+# Interactive process termination using fzf
+fkill() {
+    if ! command -v fzf >/dev/null 2>&1; then
+        echo "[-] Error: fzf is required for fkill."
+        return 1
+    fi
+
+    local pid
+    pid=$(ps -ef | sed 1d | fzf -m --header="Select process(es) to kill" | awk '{print $2}')
+
+    if [ -n "$pid" ]; then
+        echo "$pid" | xargs kill -9
+        echo "[+] Process(es) $pid terminated."
+    fi
+}
+
+# Generate a cryptographically secure random password
+genpass() {
+    local length="${1:-20}"
+    openssl rand -base64 48 | tr -dc 'a-zA-Z0-9!@#$%^&*()_+' | head -c "$length"
+    echo ""
 }
