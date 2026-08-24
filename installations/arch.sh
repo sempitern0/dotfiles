@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+## WARNING: THIS SCRIPT IS NOT FINISHED YET ##
 set -euo pipefail
 
 CURRENT_DIR=$(dirname -- "$(readlink -f -- "$0")")

@@ -149,3 +149,21 @@ prompt_confirmation() {
     fi
     return 0
 }
+
+ensure_sudo_installed() {
+    if ! command -v sudo &>/dev/null; then
+        msg_info "'sudo' is not installed."
+
+        if [[ $EUID -ne 0 ]]; then
+            msg_error "'sudo' is missing and script is not running as root. Run with 'su -c ./script.sh' or install sudo manually."
+            exit 1
+        fi
+
+        msg_info "Installing 'sudo'..."
+        if command -v pacman &>/dev/null; then
+            pacman -S --noconfirm --needed sudo
+        elif command -v apt-get &>/dev/null; then
+            apt-get update -q && apt-get install -y -q sudo
+        fi
+    fi
+}

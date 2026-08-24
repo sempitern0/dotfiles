@@ -5,7 +5,6 @@ CURRENT_DIR=$(dirname -- "$(readlink -f -- "$0")")
 
 source "${CURRENT_DIR}/lib/common.sh"
 
-# Globales del usuario objetivo (evita recalcularlas en cada función)
 TARGET_USER="${SUDO_USER:-$USER}"
 TARGET_HOME=$(getent passwd "$TARGET_USER" | cut -d: -f6)
 

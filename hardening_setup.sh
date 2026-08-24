@@ -75,8 +75,12 @@ create_initial_backup() {
     done
 
     if [[ ${#existing_paths[@]} -gt 0 ]]; then
-        tar -czf "$BACKUP_ARCHIVE" "${existing_paths[@]}" 2>/dev/null || true
-        msg_success "Initial pre-hardening backup saved to: $BACKUP_ARCHIVE"
+        if tar -czf "$BACKUP_ARCHIVE" "${existing_paths[@]}" 2>/dev/null; then
+            msg_success "Initial pre-hardening backup saved to: $BACKUP_ARCHIVE"
+        else
+            msg_error "Failed to create backup archive at $BACKUP_ARCHIVE"
+            return 1
+        fi
     else
         msg_warn "No standard configuration paths found to back up."
     fi
@@ -303,7 +307,7 @@ apply_before_ufw_rules() {
     fi
 
     # Comment out default unrestricted echo-request rule if present
-    sed -i 's/^-A ufw-before-input -p icmp --icmp-type echo-request -j ACCEPT/# &-disabled_by_script/' "$BEFORE_RULES"
+    sed -i 's/^-A ufw-before-input -p icmp --icmp-type echo-request -j ACCEPT/# &-disabled_by_script/' "$UFW_BEFORE_RULES"
 
     # Inject custom rules before the final COMMIT statement of the *filter block
     local snippet="
@@ -464,6 +468,11 @@ select_timezone() {
 
     if ! command -v timedatectl &>/dev/null; then
         msg_warn "timedatectl is not available. Skipping timezone configuration."
+        return 0
+    fi
+    
+    if [[ ! -t 0 ]]; then
+        msg_info "Non-interactive session detected. Skipping interactive timezone selection."
         return 0
     fi
 
@@ -680,7 +689,8 @@ setup_ssh_hardening() {
     fi
 
     mkdir -p "$sshd_conf_dir"
-    if ! grep -qs "^Include /etc/ssh/sshd_config.d/\*\.conf" "$main_sshd_conf"; then
+    
+    if ! grep -qs -F "Include /etc/ssh/sshd_config.d/*.conf" "$main_sshd_conf"; then
         sed -i '1i Include /etc/ssh/sshd_config.d/*.conf' "$main_sshd_conf"
     fi
 
@@ -928,9 +938,17 @@ run_all_tasks() {
 
     msg_success "Full hardening pipeline completed successfully."
 }
+
 show_interactive_menu() {
     local package_manager="$1"
     local os_distribution="$2"
+
+    if [[ ! -t 0 ]]; then
+        msg_error "Interactive menu requires a TTY terminal. Use 'run_all_tasks' for unattended mode."
+        exit 1
+    fi
+
+    trap 'echo -e "\n"; msg_info "Script execution cancelled by user."; exit 130' INT
 
     while true; do
         clear
@@ -1065,6 +1083,7 @@ main() {
     local os_distribution
     os_distribution=$(detect_distribution) || exit 1
 
+    ensure_sudo_installed
     create_initial_backup
     show_interactive_menu "$package_manager" "$os_distribution"
 
