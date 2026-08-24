@@ -16,7 +16,6 @@ CONSOLEFONT="${CONSOLEFONT:-ter-132b}"
 ROOT_PASSWORD="${ROOT_PASSWORD:-}"
 USER_PASSWORD="${USER_PASSWORD:-}"
 
-
 verify_distribution() {
     msg_info "Checking Linux distribution requirements..."
     
@@ -46,6 +45,42 @@ setup_console() {
     fi
 }
 
+# This needs to be executed after creating the local user
+setup_wsl_integrations() {
+    if is_wsl; then
+        msg_info "Applying System Integrations for WSL environment"
+        msg_info "Writing /etc/wsl.conf..."
+        cat <<EOF > /etc/wsl.conf
+[user]
+default=${TARGET_USER}
+
+[boot]
+systemd=true
+
+[interop]
+enabled=true
+appendWindowsPath=true
+EOF
+        msg_success "/etc/wsl.conf generated successfully."
+
+        msg_info "Configuring environment variables for WSLg Direct3D12..."
+        local bashrc="/home/${TARGET_USER}/.bashrc"
+        if [[ -f "$bashrc" ]]; then
+            {
+                echo '# WSLg Graphics Acceleration'
+                echo 'export GALLIUM_DRIVER=d3d12'
+                echo 'export LIBVA_DRIVER_NAME=d3d12'
+            } >> "$bashrc"
+        fi
+        
+        # Install WSL specific utility packages
+        msg_info "Installing WSL interoperability utilities..."
+        pacman -S --noconfirm --needed xdg-utils mesa vulkan-icd-loader >/dev/null 2>&1 || msg_warn "Package sync skipped or non-interactive failure."
+    else
+        msg_info "Native environment detected. Skipping WSL-specific configurations."
+    fi
+}
+
 review_configuration() {
     msg_info "Reviewing Target Installation Settings"
     
@@ -62,8 +97,6 @@ review_configuration() {
         msg_error "Execution aborted by user."
         exit 0
     fi
-
-    msg_success "Step [${CURRENT_STEP}/${TOTAL_STEPS}] completed: Configuration confirmed."
 }
 
 main() {
@@ -71,6 +104,7 @@ main() {
     verify_distribution
     review_configuration
     setup_console
+    setup_wsl_integrations
 }
 
 main
