@@ -16,6 +16,8 @@ CONSOLEFONT="${CONSOLEFONT:-ter-132b}"
 ROOT_PASSWORD="${ROOT_PASSWORD:-}"
 USER_PASSWORD="${USER_PASSWORD:-}"
 
+BOOT_MODE="unknown"
+
 verify_distribution() {
     msg_info "Checking Linux distribution requirements..."
     
@@ -76,6 +78,10 @@ EOF
         # Install WSL specific utility packages
         msg_info "Installing WSL interoperability utilities..."
         pacman -S --noconfirm --needed xdg-utils mesa vulkan-icd-loader >/dev/null 2>&1 || msg_warn "Package sync skipped or non-interactive failure."
+
+        ## By default, WSL will try to set your locale to match windows, this command overrides the locale.
+        ln -sf /etc/locale.conf /etc/default/locale
+
     else
         msg_info "Native environment detected. Skipping WSL-specific configurations."
     fi
@@ -99,12 +105,82 @@ review_configuration() {
     fi
 }
 
+
+detect_boot_mode() {
+    msg_info "Detecting System Boot Mode..."
+
+    # Bypass firmware checks under WSL
+    if is_wsl; then
+        msg_info "WSL environment detected. Bootloader setup will be skipped."
+        BOOT_MODE="wsl"
+        return 0
+    fi
+
+    local efi_file="/sys/firmware/efi/fw_platform_size"
+
+    if [[ -f "$efi_file" ]]; then
+        local fw_size
+        fw_size=$(cat "$efi_file" 2>/dev/null || echo "")
+
+        case "$fw_size" in
+            64)
+                msg_success "Boot mode: UEFI 64-bit (x64)."
+                BOOT_MODE="uefi64"
+                ;;
+            32)
+                msg_warn "Boot mode: UEFI 32-bit (IA32). Requires mixed-mode bootloader support."
+                BOOT_MODE="uefi32"
+                ;;
+            *)
+                msg_warn "UEFI detected, but unknown platform size ('$fw_size')."
+                BOOT_MODE="uefi_unknown"
+                ;;
+        esac
+    else
+        msg_info "File '$efi_file' not found. Boot mode: BIOS / CSM."
+        BOOT_MODE="bios"
+    fi
+
+}
+
+
+install_bootloader() {
+    print_step "Installing Bootloader"
+
+    case "$BOOT_MODE" in
+        wsl)
+            msg_info "Skipping bootloader installation for WSL environment."
+            ;;
+        uefi64)
+            msg_info "Installing GRUB for 64-bit UEFI system..."
+            # pacman -S --noconfirm grub efibootmgr
+            # grub-install --target=x86_64-efi --efi-directory=/boot --bootloader-id=GRUB
+            ;;
+        uefi32)
+            msg_warn "Installing GRUB for 32-bit UEFI system (IA32)..."
+            # pacman -S --noconfirm grub efibootmgr
+            # grub-install --target=i386-efi --efi-directory=/boot --bootloader-id=GRUB
+            ;;
+        bios)
+            msg_info "Installing GRUB for BIOS/CSM system..."
+            # pacman -S --noconfirm grub
+            # grub-install --target=i386-pc /dev/sda
+            ;;
+        *)
+            msg_error "Cannot install bootloader: Unrecognized boot mode '$BOOT_MODE'."
+            return 1
+            ;;
+    esac
+
+}
+
 main() {
     check_root
     verify_distribution
     review_configuration
     setup_console
     setup_wsl_integrations
+    detect_boot_mode
 }
 
 main
