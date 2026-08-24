@@ -36,13 +36,17 @@ setup_console() {
         return 0
     fi
 
+    if command_exists loadkeys; then
+        loadkeys $KEYMAP
+    fi
+
    if command_exists setfont; then
-        if setfont "$FONT" 2>/dev/null; then
-            msg_success "Console font set to '$FONT'."
+        if setfont "$CONSOLEFONT" 2>/dev/null; then
+            msg_success "Console font set to '$CONSOLEFONT'."
         elif setfont "default8x16" 2>/dev/null; then
-            msg_warn "Font '$FONT' not found. Fallback font 'default8x16' applied."
+            msg_warn "Font '$CONSOLEFONT' not found. Fallback font 'default8x16' applied."
         else
-            msg_warn "Unable to load console font '$FONT' or default fallback."
+            msg_warn "Unable to load console font '$CONSOLEFONT' or default fallback."
         fi
     fi
 }
@@ -87,25 +91,6 @@ EOF
     fi
 }
 
-review_configuration() {
-    msg_info "Reviewing Target Installation Settings"
-    
-    echo -e "  - Target OS:    ${cyanColour}Arch Linux${endColour}"
-    echo -e "  - Keymap:       ${cyanColour}${KEYMAP}${endColour}"
-    echo -e "  - Timezone:     ${cyanColour}${TIMEZONE}${endColour}"
-    echo -e "  - Locale:       ${cyanColour}${LOCALE}${endColour}"
-    echo -e "  - Hostname:     ${cyanColour}${HOSTNAME}${endColour}"
-    echo -e "  - Target User:  ${cyanColour}${TARGET_USER}${endColour}"
-    echo -e "  - Console Font: ${cyanColour}${CONSOLEFONT}${endColour}"
-    echo
-
-    if ! prompt_confirmation "Proceed with execution using these parameters?"; then
-        msg_error "Execution aborted by user."
-        exit 0
-    fi
-}
-
-
 detect_boot_mode() {
     msg_info "Detecting System Boot Mode..."
 
@@ -143,10 +128,7 @@ detect_boot_mode() {
 
 }
 
-
 install_bootloader() {
-    print_step "Installing Bootloader"
-
     case "$BOOT_MODE" in
         wsl)
             msg_info "Skipping bootloader installation for WSL environment."
@@ -174,13 +156,71 @@ install_bootloader() {
 
 }
 
+check_internet_connection() {
+    msg_info "Checking internet connection..."
+
+    # Attempt to ping the official Arch Linux server
+    if ping -c 2 ping.archlinux.org >/dev/null 2>&1; then
+        msg_success "Internet connection established."
+        return 0
+    fi
+
+    msg_warn "No internet connection detected."
+
+    if is_wsl; then
+        msg_error "Running under WSL. Please check your Windows host network configuration."
+        return 1
+    fi
+
+    # Diagnostic output for native environment / Arch Live ISO
+    msg_info "Listing system network interfaces:"
+    ip -br link show 2>/dev/null || ip link
+
+    # Check and unblock wireless interfaces blocked by rfkill
+    if command_exists rfkill; then
+        if rfkill list 2>/dev/null | grep -q "blocked: yes"; then
+            msg_warn "Interfaces blocked by rfkill detected. Unblocking all..."
+            rfkill unblock all
+        fi
+    fi
+
+    msg_error "An active internet connection is required to proceed."
+    echo -e "${yellowColour}Recommended steps from the Arch Wiki:${endColour}"
+    echo "  - Ethernet: Ensure your cable is connected."
+    echo "  - Wi-Fi: Authenticate using 'iwctl'."
+    echo "  - Mobile Broadband: Connect using 'mmcli'."
+    
+    return 1
+}
+
+review_configuration() {
+    msg_info "Reviewing Target Installation Settings"
+    
+    echo -e "  - Target OS:    ${cyanColour}Arch Linux${endColour}"
+    echo -e "  - Keymap:       ${cyanColour}${KEYMAP}${endColour}"
+    echo -e "  - Timezone:     ${cyanColour}${TIMEZONE}${endColour}"
+    echo -e "  - Locale:       ${cyanColour}${LOCALE}${endColour}"
+    echo -e "  - Hostname:     ${cyanColour}${HOSTNAME}${endColour}"
+    echo -e "  - Target User:  ${cyanColour}${TARGET_USER}${endColour}"
+    echo -e "  - Console Font: ${cyanColour}${CONSOLEFONT}${endColour}"
+    echo
+
+    if ! prompt_confirmation "Proceed with execution using these parameters?"; then
+        msg_error "Execution aborted by user."
+        exit 0
+    fi
+}
+
+
 main() {
     check_root
     verify_distribution
     review_configuration
     setup_console
-    setup_wsl_integrations
     detect_boot_mode
+    check_internet_connection || exit 1
+    
+    setup_wsl_integrations
 }
 
 main
