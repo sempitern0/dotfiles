@@ -85,6 +85,11 @@ is_server_environment() {
     return 0 # Server environment
 }
 
+# Check if running under Windows Subsystem for Linux (WSL)
+is_wsl() {
+    [[ -n "${WSL_DISTRO_NAME:-}" ]] || grep -qi "microsoft" /proc/version 2>/dev/null
+}
+
 copy_with_backup() {
     local src="$1"
     local dest="$2"
