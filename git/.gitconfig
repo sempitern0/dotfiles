@@ -35,3 +35,5 @@
 	updateRefs = true
 [pull]
 	rebase = true
+[include]
+    path = ~/git/.gitconfig

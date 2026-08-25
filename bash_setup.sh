@@ -143,12 +143,13 @@ main() {
     msg_success "The environment is ready to use!"
     #msg_info "Run 'exec bash' or restart your terminal to apply changes."
 
-    ## Auto source the terminal to see the changes
-    if [[ $- == *i* ]]; then
-        if ! shopt -q login_shell; then
-            source ~/.bashrc
-        fi
-    fi
 }
 
 main "$@"
+
+## Auto source the terminal to see the changes
+if [[ $- == *i* ]]; then
+    if ! shopt -q login_shell; then
+        source ~/.bashrc
+    fi
+fi

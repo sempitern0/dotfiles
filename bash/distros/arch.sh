@@ -46,6 +46,7 @@ SYSTEM_SERVICES=(
     "paccache.timer"        # Auto pacman cache cleaner
     "auto-cpufreq.service"  # Battery optimizer
     "bluetooth.service"     # Bluetooth manager
+    "reflector.timer"       # Auto mirrorlist update
 )
 
 # Systemd services (User level)
@@ -223,8 +224,64 @@ enable_systemd_services() {
     fi
 }
 
+configure_reflector() {
+    if ! command -v reflector &>/dev/null; then
+        msg_info "Reflector is not installed. Skipping mirror setup."
+        return 0
+    fi
+
+    msg_info "Configuring optimal pacman mirrors with Reflector..."
+
+    local country=""
+
+    local current_tz
+    current_tz=$(timedatectl show --property=Timezone --value 2>/dev/null || true)
+
+    if [[ -n "$current_tz" && -f /usr/share/zoneinfo/zone1970.tab ]]; then
+        country=$(awk -v tz="$current_tz" '$0 !~ /^#/ && $3 == tz {print $1}' /usr/share/zoneinfo/zone1970.tab 2>/dev/null | cut -d',' -f1 || true)
+    fi
+
+    if [[ -z "$country" ]]; then
+        country=$(curl -s --max-time 3 https://ipapi.co/country/ 2>/dev/null || true)
+    fi
+
+    if [[ -z "$country" ]]; then
+        country=$(curl -s --max-time 3 "http://ip-api.com/line/?fields=countryCode" 2>/dev/null || true)
+    fi
+
+    country=$(echo "$country" | tr -d '[:space:]')
+
+    if [[ -n "$country" ]]; then
+        msg_info "Updating mirrors using country code: $country..."
+        if ! reflector --country "$country" --protocol https --latest 15 --sort rate --save /etc/pacman.d/mirrorlist &>/dev/null; then
+            msg_warn "Filtering by country '$country' failed. Testing global mirrors..."
+            reflector --protocol https --latest 20 --download-timeout 5 --sort rate --save /etc/pacman.d/mirrorlist &>/dev/null || msg_warn "Network unavailable or Reflector failed. Keeping default mirrorlist."
+        else
+            msg_success "Mirrors updated successfully for country code '$country'."
+        fi
+    else
+        msg_info "Country code unavailable. Fetching fastest global mirrors..."
+        reflector --protocol https --latest 20 --download-timeout 5 --sort rate --save /etc/pacman.d/mirrorlist &>/dev/null || msg_warn "Network unavailable or Reflector failed. Keeping default mirrorlist."
+    fi
+
+    if [[ -f /etc/reflector.conf ]]; then
+        cat <<EOF > /etc/reflector.conf
+--save /etc/pacman.d/mirrorlist
+--protocol https
+--latest 15
+--sort rate
+EOF
+        if [[ -n "$country" ]]; then
+            echo "--country '$country'" >> /etc/reflector.conf
+        fi
+    fi
+
+    return 0
+}
+
 # Flujo principal de ejecución
 setup_user_and_sudo
 install_system_packages
+configure_reflector
 install_aur_packages
 enable_systemd_services
