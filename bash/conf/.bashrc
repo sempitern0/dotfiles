@@ -144,7 +144,7 @@ __sync_history() {
   history -r
 }
 
-if declare -p PROMPT_COMMAND 2>/dev/null | grep -q 'declare \-a'; then
+if declare -p PROMPT_COMMAND 2>/dev/null | grep -q 'declare -a'; then
   PROMPT_COMMAND=(__update_prompt_vars __sync_history "${PROMPT_COMMAND[@]}")
 else
   PROMPT_COMMAND="__update_prompt_vars; __sync_history; ${PROMPT_COMMAND:-}"
