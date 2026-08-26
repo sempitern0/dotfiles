@@ -21,7 +21,11 @@ PACKAGES=(
     coreutils man-db man-pages curl wget ca-certificates tree vim git
     htop iftop bat fastfetch jq fzf ripgrep inetutils 
     traceroute net-tools nmap lynis bluez bluez-utils bluez-deprecated-tools 
-    ntp reflector
+    ntp reflector intel-ucode amd-ucode linux-firmware sof-firmware
+    alsa-firmware mesa vulkan-intel vulkan-radeon vulkan-mesa-layers
+    xf86-video-amdgpu xf86-video-ati xf86-video-nouveau xf86-video-intel
+    dosfstools ntfs-3g exfatprogs mtools udisks2 wireless-regdb
+    usb_modeswitch mobile-broadband-provider-info usbmuxd
 )
 
 # Graphical tools
@@ -277,6 +281,49 @@ EOF
     fi
 
     return 0
+}
+
+configure_portable_initramfs() {
+    msg_info "Configuring initramfs for universal hardware support..."
+
+    # Handle mkinitcpio configuration (Standard Arch Linux default)
+    if [ -f /etc/mkinitcpio.conf ]; then
+        msg_info "Detected mkinitcpio. Disabling host autodetect..."
+        
+        # Create a backup of the original configuration
+        cp /etc/mkinitcpio.conf /etc/mkinitcpio.conf.bak
+
+        # Remove the 'autodetect' hook to include all storage, GPU, and USB drivers
+        sed -i -E 's/\bautodetect\b//g' /etc/mkinitcpio.conf
+        sed -i 's/  */ /g' /etc/mkinitcpio.conf  # Clean up duplicate spaces
+
+        # Rebuild initramfs images for all installed kernels
+        msg_info "Rebuilding initramfs images with mkinitcpio..."
+        if mkinitcpio -P &>/dev/null; then
+            msg_success "mkinitcpio configured successfully for portable booting."
+        else
+            msg_error "Failed to regenerate mkinitcpio images."
+        fi
+    fi
+
+    # Handle Dracut configuration (Default in recent EndeavourOS releases)
+    if [ -d /etc/dracut.conf.d ]; then
+        msg_info "Detected Dracut. Disabling host-only mode..."
+
+        # Create a configuration drop-in to force generic image generation
+        cat <<EOF > /etc/dracut.conf.d/portable.conf
+# Disable host-only mode to build a generic image compatible with any hardware
+hostonly="no"
+EOF
+
+        # Rebuild all Dracut images
+        msg_info "Rebuilding initramfs images with Dracut..."
+        if dracut --regenerate-all --force &>/dev/null; then
+            msg_success "Dracut configured successfully for portable booting."
+        else
+            msg_error "Failed to regenerate Dracut images."
+        fi
+    fi
 }
 
 # Flujo principal de ejecución

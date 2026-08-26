@@ -15,6 +15,9 @@ setterm --blength 0 > /dev/null 2>&1
 # https://unix.stackexchange.com/questions/545045/what-is-the-difference-between-ixon-and-ixoff-tty-attributes
 stty -ixon
 
+export EDITOR='vim'
+export VISUAL='vim'
+
 # Expand the history size
 export HISTFILESIZE=10000
 export HISTSIZE=500
@@ -98,6 +101,14 @@ fi
 # FZF key bindings
 if [ -f /usr/share/doc/fzf/examples/key-bindings.bash ]; then
     source /usr/share/doc/fzf/examples/key-bindings.bash
+fi
+
+# FZF key bindings & completion (Ruta correcta para Arch Linux)
+if [ -f /usr/share/fzf/key-bindings.bash ]; then
+    source /usr/share/fzf/key-bindings.bash
+fi
+if [ -f /usr/share/fzf/completion.bash ]; then
+    source /usr/share/fzf/completion.bash
 fi
 
 # Disabled fastfetch to not start on new terminal sessions
