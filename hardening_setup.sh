@@ -331,7 +331,6 @@ apply_kernel_network_hardening() {
         msg_warn "Sysctl reloaded with non-fatal warnings."
     fi
 }
-
 configure_firewall() {
     local package_manager="$1"
     local fw_engine=""
@@ -372,12 +371,28 @@ configure_firewall() {
 
     msg_info "Selected firewall engine: ${cyanColour}${fw_engine}${endColour}"
 
+    # Asignación dinámica del servicio systemd según el motor detectado
+    local fw_service=""
+    case "$fw_engine" in
+        ufw)       fw_service="ufw.service" ;;
+        firewalld) fw_service="firewalld.service" ;;
+        nftables)  fw_service="nftables.service" ;;
+    esac
+
+    # Inserción en SYSTEM_SERVICES evitando duplicados
+    if [[ -n "$fw_service" ]]; then
+        if [[ ! " ${SYSTEM_SERVICES[*]:-} " =~ " ${fw_service} " ]]; then
+            SYSTEM_SERVICES+=("$fw_service")
+            msg_info "Added firewall service to systemd targets: ${cyanColour}${fw_service}${endColour}"
+        fi
+    fi
+
     case "$fw_engine" in
         ufw)
             if [[ -f "${UFW_RULES:-}" ]]; then
                 source "$UFW_RULES"
             else
-                msg_error "UFW rules script not found at: ${UFW_RULES}"
+                msg_error "UFW rules script not found at: ${UFW_RULES:-}"
                 return 1
             fi
             ;;
@@ -385,7 +400,7 @@ configure_firewall() {
             if [[ -f "${FIREWALLD_RULES:-}" ]]; then
                 source "$FIREWALLD_RULES"
             else
-                msg_error "firewalld rules script not found at: ${FIREWALLD_RULES}"
+                msg_error "firewalld rules script not found at: ${FIREWALLD_RULES:-}"
                 return 1
             fi
             ;;
@@ -393,7 +408,7 @@ configure_firewall() {
             if [[ -f "${NFTABLES_RULES:-}" ]]; then
                 source "$NFTABLES_RULES"
             else
-                msg_error "nftables rules script not found at: ${NFTABLES_RULES}"
+                msg_error "nftables rules script not found at: ${NFTABLES_RULES:-}"
                 return 1
             fi
             ;;

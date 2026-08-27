@@ -49,46 +49,78 @@ configure_git() {
         return 1
     fi
 
-    local src="$CURRENT_DIR/git/.gitconfig"
-    local dest="$TARGET_HOME/.gitconfig"
+    # --- Git Configuration ---
+    local git_src="$CURRENT_DIR/git/.gitconfig"
+    local git_dest="$TARGET_HOME/.gitconfig"
 
-    if [[ ! -f "$src" ]]; then
-        msg_error "Git configuration source file not found at: '$src'"
+    if [[ ! -f "$git_src" ]]; then
+        msg_error "Git configuration source file not found at: '$git_src'"
         return 1
     fi
 
-    copy_with_backup "$src" "$dest" "$TARGET_USER"
+    copy_with_backup "$git_src" "$git_dest" "$TARGET_USER"
     msg_success "Git configured successfully for user '$TARGET_USER'!"
+
+    # --- SSH Configuration ---
+    local ssh_src="$CURRENT_DIR/git/ssh/config"
+    local ssh_dir="$TARGET_HOME/.ssh"
+    local ssh_dest="$ssh_dir/config"
+
+    if [[ -f "$ssh_src" ]]; then
+        msg_info "Copying SSH configuration..."
+
+        # Ensure ~/.ssh directory exists with correct permissions (700)
+        mkdir -p "$ssh_dir"
+        chmod 700 "$ssh_dir"
+        chown "$TARGET_USER:" "$ssh_dir" 2>/dev/null || true
+
+        # Copy SSH config file with backup
+        copy_with_backup "$ssh_src" "$ssh_dest" "$TARGET_USER"
+
+        # Set strict permissions required by SSH (600)
+        chmod 600 "$ssh_dest"
+        chown "$TARGET_USER:" "$ssh_dest" 2>/dev/null || true
+
+        msg_success "SSH configuration copied with secure permissions (600)!"
+    else
+        msg_warn "SSH configuration source file not found at: '$ssh_src'. Skipping SSH setup."
+    fi
 }
 
 configure_vim() {
     print_section "Configuring Vim"
 
-    if [[ -d "$TARGET_HOME/.vim_runtime" ]]; then
-        msg_warn "Vim configuration (.vim_runtime) already exists. Skipping."
-        return 0
+    # Check for existing Vim configuration and prompt user for overwrite permission
+    if [[ -d "$TARGET_HOME/.vim_runtime" ]] || [[ -f "$TARGET_HOME/.vimrc" ]]; then
+        if prompt_confirmation "Vim configuration (.vim_runtime or .vimrc) already exists. Do you want to overwrite it?" "N"; then
+            msg_info "Removing existing Vim configuration..."
+            rm -rf "$TARGET_HOME/.vim_runtime" "$TARGET_HOME/.vimrc"
+        else
+            return 0
+        fi
     fi
 
-    msg_info "Cloning amix/vimrc repository for user '$TARGET_USER'..."
+    local fallback_src="$CURRENT_DIR/vim/.vimrc"
+    local fallback_dest="$TARGET_HOME/.vimrc"
 
-    if ! sudo -u "$TARGET_USER" git clone --depth=1 https://github.com/amix/vimrc.git "$TARGET_HOME/.vim_runtime" &>/dev/null; then
-        msg_error "Failed to clone amix/vimrc repository."
+    if [[ -f "$fallback_src" ]]; then
+        msg_info "Applying local fallback Vim configuration from '$fallback_src'..."
+
+        copy_with_backup "$fallback_src" "$fallback_dest" "$TARGET_USER"
+        chmod 644 "$fallback_dest"
+        chown "$TARGET_USER:" "$fallback_dest" 2>/dev/null || true
+
+        msg_success "Local Vim fallback configuration deployed successfully for '$TARGET_USER'!"
+    else
+        msg_error "Local fallback Vim configuration file not found at: '$fallback_src'"
         return 1
     fi
-
-    msg_info "Executing vimrc setup script..."
-    if ! sudo -u "$TARGET_USER" sh "$TARGET_HOME/.vim_runtime/install_basic_vimrc.sh" &>/dev/null; then
-        msg_error "Failed to run amix/vimrc installer script."
-        return 1
-    fi
-
-    msg_success "Vim configured successfully for '$TARGET_USER'!"
 }
 
 configure_bat_symlink() {
     if command_exists batcat; then
-        local batcat_path
-        batcat_path=$(command -v batcat)
+        local batcat_path=$(command -v batcat)
+
         local bin_dir="$TARGET_HOME/.local/bin"
         local symlink="$bin_dir/bat"
 
@@ -112,7 +144,7 @@ main() {
 
     if [[ $EUID -ne 0 ]]; then
         msg_warn "Root privileges required. Re-running with sudo..."
-        exec sudo "$0" "$@"
+        exec sudo -E "$0" "$@"
     fi
 
     clear

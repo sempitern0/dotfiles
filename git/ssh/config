@@ -1,0 +1,11 @@
+Host me.github.com
+    # Real GitHub server hostname
+    HostName github.com
+    # Default user for Git SSH connections
+    User git
+    # Path to your private SSH key (Change this to your actual private key path)
+    IdentityFile ~/.ssh/id_ed25519
+    # Forces SSH to only use the specified IdentityFile and ignore other keys in ssh-agent
+    IdentitiesOnly yes
+    # Automatically load key into ssh-agent on first use (works on macOS and modern Linux)
+    AddKeysToAgent yes

@@ -12,27 +12,25 @@ msg_success() { echo -e "\e[32m[OK]\e[0m $*"; }
 msg_warn()    { echo -e "\e[33m[WARN]\e[0m $*"; }
 msg_error()   { echo -e "\e[31m[ERROR]\e[0m $*"; }
 
-PPA_REPOS=(
-    "ppa:zhangsongcui3371/fastfetch"
-)
+PPA_REPOS=()
 
 PACKAGES=(
     coreutils man-db man-pages curl wget ca-certificates tree vim git sudo
-    build-essential software-properties-common lsb-release
-    htop iftop bat fastfetch jq fzf ripgrep fd-find ncdu duf micro
-    inetutils-traceroute net-tools nmap lynis chkrootkit whatweb ufw
-    bluez bluez-tools ntpsec zram-tools man-pages
+    build-essential software-properties-common lsb-release jq fzf
+    htop iftop btop bat ripgrep fd-find ncdu duf micro
+    inetutils-traceroute net-tools mtr dnsutils psmisc lsof
+    nmap lynis chkrootkit whatweb ufw tcpdump tshark
+    bluez bluez-tools ntpsec zram-tools
 )
 
 GUI_PACKAGES=(
-    xclip feh chafa kitty
+    xclip feh chafa kitty tilix
 )
 
 SYSTEM_SERVICES=(
     "fstrim.timer"     
     "zramswap.service"  
     "bluetooth.service" 
-    "ufw.service"
 )
 
 USER_SERVICES=()
@@ -105,6 +103,8 @@ install_system_packages() {
             msg_warn "No valid packages available to install."
         fi
     fi
+    
+    install_fastfetch
 
     if [ ${#CLEANUP_CMD[@]} -gt 0 ]; then
         msg_info "Cleaning orphan packages..."
@@ -139,6 +139,35 @@ enable_systemd_services() {
                 msg_error "Failed to enable user service: ${user_service}"
             fi
         done
+    fi
+}
+
+install_fastfetch() {
+    if command -v fastfetch &>/dev/null; then
+        msg_info "Fastfetch ya está instalado."
+        return 0
+    fi
+
+    msg_info "Instalando Fastfetch..."
+    
+    # Intentar via APT (si existe en Debian Trixie/Testing/Sid o Backports)
+    if apt-cache show fastfetch &>/dev/null; then
+        "${INSTALL_CMD[@]}" fastfetch &>/dev/null && msg_success "Fastfetch instalado desde repositorios APT." && return 0
+    fi
+
+    # Fallback: Descargar el último paquete .deb oficial desde GitHub (Debian 12 Bookworm)
+    msg_info "Fastfetch no está en APT. Obteniendo última versión de GitHub Releases..."
+    local deb_url
+    deb_url=$(curl -s https://api.github.com/repos/fastfetch-cli/fastfetch/releases/latest | jq -r '.assets[] | select(.name | test("linux-amd64\\.deb$")) | .browser_download_url' 2>/dev/null || true)
+
+    if [[ -n "$deb_url" && "$deb_url" != "null" ]]; then
+        local temp_deb="/tmp/fastfetch_latest.deb"
+        wget -q "$deb_url" -O "$temp_deb"
+        dpkg -i "$temp_deb" &>/dev/null || "${PACKAGE_MANAGER}" install -f -y -q &>/dev/null
+        rm -f "$temp_deb"
+        msg_success "Fastfetch instalado correctamente desde GitHub."
+    else
+        msg_warn "No se pudo obtener el ejecutable de Fastfetch desde GitHub. Omitiendo..."
     fi
 }
 

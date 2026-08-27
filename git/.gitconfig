@@ -1,39 +1,89 @@
 [user]
-	name = <my_username>
-	email = <my_email> 
+    # Default name attached to your commits and tags
+    name = <my_username>
+    # Default email address attached to your commits and tags
+    email = <my_email> 
+
 [core]
-	autocrlf = input
+    # Converts CRLF (Windows) line endings to LF on commit, keeps LF on checkout
+    autocrlf = input
+    # Displays non-ASCII characters (e.g., accents, UTF-8) literally instead of octal escapes
+    quotePath = false
+
 [column]
-	ui = auto
+    # Automatically formats terminal output (e.g., git branch lists) into organized columns
+    ui = auto
+
 [branch]
-	sort = -committerdate
+    # Sorts listed branches by their last commit date in descending order (newest first)
+    sort = -committerdate
+
 [tag]
-	sort = version:refname
+    # Sorts tags logically using semantic versioning rules (e.g., v1.10 after v1.9)
+    sort = version:refname
+
 [init]
-	defaultBranch = main
+    # Sets the default branch name to 'main' for newly initialized repositories
+    defaultBranch = main
+
 [diff]
-	algorithm = histogram
-	colorMoved = plain
-	mnemonicPrefix = true
-	renames = true
+    # Uses the histogram diff algorithm to produce cleaner and more readable diffs
+    algorithm = histogram
+    # Highlights moved lines of code in diffs using a distinct color
+    colorMoved = plain
+    # Replaces default diff prefixes (a/ vs b/) with contextual labels (e.g., c/ for commit, w/ for working tree)
+    mnemonicPrefix = true
+    # Enables automatic detection of renamed files in diffs
+    renames = true
+
 [push]
-	autoSetupRemote = true
-	followTags = true
-	default = simple
+    # Automatically sets up remote branch tracking on the first push
+    autoSetupRemote = true
+    # Automatically pushes annotated tags that point to commits being pushed
+    followTags = true
+    # Pushes the current branch to its configured upstream branch
+    default = simple
+
 [fetch]
-	prune = true
-	pruneTags = true
-	all = true
+    # Automatically removes local tracking references to branches deleted on the remote
+    prune = true
+    # Automatically removes local tags that no longer exist on the remote
+    pruneTags = true
+    # Automatically fetches updates from all configured remotes instead of just 'origin'
+    all = true
+    # Validates fetched objects to detect corruption or malicious payloads upon downloading
+    fsckObjects = true
+
 [help]
-	autocorrect = prompt
+    # Prompts for user confirmation before executing an automatically corrected mistyped command
+    autocorrect = prompt
+
 [rerere]
-	enabled = true
-	autoupdate = true
+    # Enables "Reuse Recorded Resolution" to remember and reapply previous merge conflict fixes automatically
+    enabled = true
+    # Automatically stages files resolved by rerere
+    autoupdate = true
+
 [rebase]
-	autoSquash = true
-	autoStash = true
-	updateRefs = true
+    # Automatically reorders and applies fixup! and squash! commits during interactive rebases
+    autoSquash = true
+    # Automatically stashes uncommitted changes before rebasing and reapplies them afterwards
+    autoStash = true
+    # Automatically updates stacked branches pointing to commits modified by a rebase
+    updateRefs = true
+
 [pull]
-	rebase = true
+    # Rebases local commits on top of fetched remote changes during 'git pull' to maintain a linear history
+    rebase = true
+
 [include]
+    # Includes additional configuration settings from an external config file
     path = ~/git/.gitconfig
+
+[transfer]
+    # Enforces object integrity checks during packfile transfers to block corrupt objects
+    fsckObjects = true 
+
+[receive]
+    # Rejects incoming pushes if the uploaded objects are corrupt or malformed
+    fsckObjects = true
