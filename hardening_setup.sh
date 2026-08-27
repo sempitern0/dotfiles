@@ -8,7 +8,10 @@ source "${CURRENT_DIR}/lib/common.sh"
 SYSCTL_DIR="/etc/sysctl.d"
 
 UFW_BEFORE_RULES="/etc/ufw/before.rules"
-UFW_RULES="$CURRENT_DIR/hardening/network/ufw_rules.sh"
+UFW_RULES="$CURRENT_DIR/hardening/network/ufw.sh"
+NFTABLES_RULES="$CURRENT_DIR/hardening/network/nftables.sh"
+FIREWALLD_RULES="$CURRENT_DIR/hardening/network/firewalld.sh"
+
 QUAD9_DNS="$CURRENT_DIR/hardening/network/quad9_dns.sh"
 
 HARDWARE_HARDENING_RULES="$CURRENT_DIR/hardening/hardware/memory_hardening.sh"
@@ -135,9 +138,26 @@ restore_backup() {
         fi
     done
 
-    if command -v ufw &>/dev/null; then
+   msg_info "Checking active firewall engines to disable..."
+
+    # 1. UFW
+    if command -v ufw &>/dev/null || systemctl is-active --quiet ufw 2>/dev/null; then
         msg_info "Disabling UFW firewall..."
         ufw disable &>/dev/null || true
+        systemctl disable --now ufw &>/dev/null || true
+    fi
+
+    # 2. firewalld
+    if command -v firewall-cmd &>/dev/null || systemctl is-active --quiet firewalld 2>/dev/null; then
+        msg_info "Disabling firewalld service..."
+        systemctl disable --now firewalld &>/dev/null || true
+    fi
+
+    # 3. nftables
+    if command -v nft &>/dev/null || systemctl is-active --quiet nftables 2>/dev/null; then
+        msg_info "Flushing nftables rules and disabling service..."
+        nft flush ruleset &>/dev/null || true
+        systemctl disable --now nftables &>/dev/null || true
     fi
 
     msg_info "3/6 Re-enabling standard background services..."
@@ -286,79 +306,101 @@ install_essentials() {
     msg_success "Essential utilities installed successfully."
 }
 
-apply_before_ufw_rules() {
-    msg_info "Configuring ufw advanced rules in ${UFW_BEFORE_RULES}..."
-
-    if [[ ! -f "$UFW_BEFORE_RULES" ]]; then
-        msg_error "File ${UFW_BEFORE_RULES} not found."
-        return 1
-    fi
-
-    # Backup original before.rules if not already backed up
-    if [[ ! -f "${UFW_BEFORE_RULES}.bak" ]]; then
-        cp "$UFW_BEFORE_RULES" "${UFW_BEFORE_RULES}.bak"
-        msg_info "Backup created at ${UFW_BEFORE_RULES}.bak"
-    fi
-
-    # Check if custom rules are already injected
-    if grep -q "ctstate INVALID" "$UFW_BEFORE_RULES"; then
-        msg_warn "Custom INVALID/ICMP rate-limiting rules already present. Skipping modification."
+apply_kernel_network_hardening() {
+    if [[ ! -f "${KERNEL_NETWORK_HARDENING_CONF:-}" ]]; then
+        msg_warn "Kernel network hardening configuration file not found at: ${KERNEL_NETWORK_HARDENING_CONF:-}"
         return 0
     fi
 
-    # Comment out default unrestricted echo-request rule if present
-    sed -i 's/^-A ufw-before-input -p icmp --icmp-type echo-request -j ACCEPT/# &-disabled_by_script/' "$UFW_BEFORE_RULES"
+    msg_info "Applying kernel network hardening configuration..."
+    mkdir -p "$SYSCTL_DIR"
 
-    # Inject custom rules before the final COMMIT statement of the *filter block
-    local snippet="
-# --- CUSTOM HARDENING RULES ---
-# Drop INVALID state packets (malformed packets / port scans)
--A ufw-before-input -m conntrack --ctstate INVALID -j DROP
+    local conf_filename="${KERNEL_NETWORK_HARDENING_CONF##*/}"
 
-# Rate-limit ICMP Pings (max 3/s with burst of 5)
--A ufw-before-input -p icmp --icmp-type echo-request -m limit --limit 3/s --limit-burst 5 -j ACCEPT
--A ufw-before-input -p icmp --icmp-type echo-request -j DROP
-"
+    cp "$KERNEL_NETWORK_HARDENING_CONF" "$SYSCTL_DIR"
+    chmod 644 "$SYSCTL_DIR/$conf_filename"
 
-    # Insert snippet right before the COMMIT line
-    sed -i "/^COMMIT/i $snippet" "$UFW_BEFORE_RULES"
+    msg_success "Copied $conf_filename to $SYSCTL_DIR (644)."
+    print_separator
+    msg_info "Reloading sysctl network parameters..."
 
-    msg_info "Successfully injected INVALID packet drop and ICMP rate-limiting rules."
-}
-
-apply_ufw_rules() {
-    if [[ -f "${UFW_RULES:-}" ]]; then
-        apply_before_ufw_rules
-
-        msg_info "Applying UFW firewall rules..."
-        source "$UFW_RULES"
-
-        if [[ ! -f "${KERNEL_NETWORK_HARDENING_CONF:-}" ]]; then
-            msg_warn "Kernel network hardening configuration file not found at: ${KERNEL_NETWORK_HARDENING_CONF:-}"
-            return 0
-        fi
-
-        msg_info "Applying kernel network hardening configuration..."
-        mkdir -p "$SYSCTL_DIR"
-
-        local conf_filename="${KERNEL_NETWORK_HARDENING_CONF##*/}"
-
-        cp "$KERNEL_NETWORK_HARDENING_CONF" "$SYSCTL_DIR"
-        chmod 644 "$SYSCTL_DIR/$conf_filename"
-
-        msg_success "Copied $conf_filename to $SYSCTL_DIR (644)."
-        print_separator
-        msg_info "Reloading sysctl network parameters..."
-
-        if sysctl --system &>/dev/null; then
-            msg_success "Sysctl kernel settings reloaded successfully."
-        else
-            msg_warn "Sysctl reloaded with non-fatal warnings."
-        fi
+    if sysctl --system &>/dev/null; then
+        msg_success "Sysctl kernel settings reloaded successfully."
     else
-        msg_warn "File UFW_RULES not found at path: ${UFW_RULES:-}"
+        msg_warn "Sysctl reloaded with non-fatal warnings."
     fi
 }
+
+configure_firewall() {
+    local package_manager="$1"
+    local fw_engine=""
+
+    msg_info "Detecting active firewall engine..."
+
+    if systemctl is-active --quiet ufw 2>/dev/null; then
+        fw_engine="ufw"
+    elif systemctl is-active --quiet firewalld 2>/dev/null; then
+        fw_engine="firewalld"
+    elif systemctl is-active --quiet nftables 2>/dev/null; then
+        fw_engine="nftables"
+    elif command_exists ufw; then
+        fw_engine="ufw"
+    elif command_exists firewall-cmd; then
+        fw_engine="firewalld"
+    elif command_exists nft; then
+        fw_engine="nftables"
+    fi
+
+    if [[ -z "$fw_engine" ]]; then
+        msg_warn "No firewall detected. Installing UFW as default firewall..."
+        case "$package_manager" in
+            apt)
+                apt update -qq && apt install -y ufw
+                ;;
+            pacman)
+                pacman -S --needed --noconfirm ufw
+                ;;
+            *)
+                msg_error "Cannot auto-install firewall: unsupported package manager '$package_manager'."
+                return 1
+                ;;
+        esac
+
+        fw_engine="ufw"
+    fi
+
+    msg_info "Selected firewall engine: ${cyanColour}${fw_engine}${endColour}"
+
+    case "$fw_engine" in
+        ufw)
+            if [[ -f "${UFW_RULES:-}" ]]; then
+                source "$UFW_RULES"
+            else
+                msg_error "UFW rules script not found at: ${UFW_RULES}"
+                return 1
+            fi
+            ;;
+        firewalld)
+            if [[ -f "${FIREWALLD_RULES:-}" ]]; then
+                source "$FIREWALLD_RULES"
+            else
+                msg_error "firewalld rules script not found at: ${FIREWALLD_RULES}"
+                return 1
+            fi
+            ;;
+        nftables)
+            if [[ -f "${NFTABLES_RULES:-}" ]]; then
+                source "$NFTABLES_RULES"
+            else
+                msg_error "nftables rules script not found at: ${NFTABLES_RULES}"
+                return 1
+            fi
+            ;;
+    esac
+
+    apply_kernel_network_hardening
+}
+
 
 setup_quad9_dns() {
     if [[ -f "${QUAD9_DNS:-}" ]]; then
@@ -906,7 +948,7 @@ run_all_tasks() {
     setup_fail2ban "$package_manager" || msg_warn "Fail2ban setup encountered issues."
     print_separator
 
-    apply_ufw_rules || msg_warn "UFW / sysctl rules application skipped or failed."
+    configure_firewall "$package_manager" || msg_warn "Firewall rules application skipped or failed."
     print_separator
 
     setup_quad9_dns || msg_warn "Quad9 DNS setup encountered issues."
@@ -961,7 +1003,7 @@ show_interactive_menu() {
         echo -e " 4) ${cyanColour}Time Sync & TZ${endColour}       -> Chrony NTP daemon setup & interactive timezone selection"
         echo -e " 5) ${cyanColour}Auto-Upgrades${endColour}        -> Unattended security updates (Debian/Ubuntu only)"
         echo -e " 6) ${cyanColour}Fail2ban Service${endColour}     -> Bruteforce protection & custom SSH jail policies"
-        echo -e " 7) ${cyanColour}UFW & Sysctl Net${endColour}     -> Firewall rules application & Network kernel hardening"
+        echo -e " 7) ${cyanColour}Firewall${endColour}     -> Firewall rules application & Network kernel hardening"
         echo -e " 8) ${cyanColour}Quad9 DNS Setup${endColour}      -> Malware blocking, DNSSEC & DNS-over-TLS configuration"
         echo -e " 9) ${cyanColour}Hardware & Memory${endColour}    -> Limits, coredumps, dmesg restriction, swappiness & /dev/shm"
         echo -e "10) ${cyanColour}Secure Mounts${endColour}        -> Apply nodev,nosuid,noexec flags to /dev/shm & fstab"
@@ -1010,7 +1052,7 @@ show_interactive_menu() {
                 read -rp "Press [ENTER] to return to menu..."
                 ;;
             7)
-                apply_ufw_rules
+                configure_firewall "$package_manager"
                 read -rp "Press [ENTER] to return to menu..."
                 ;;
             8)
