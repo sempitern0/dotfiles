@@ -141,20 +141,20 @@ restore_backup() {
    msg_info "Checking active firewall engines to disable..."
 
     # 1. UFW
-    if command -v ufw &>/dev/null || systemctl is-active --quiet ufw 2>/dev/null; then
+    if command_exists ufw || systemctl is-active --quiet ufw 2>/dev/null; then
         msg_info "Disabling UFW firewall..."
         ufw disable &>/dev/null || true
         systemctl disable --now ufw &>/dev/null || true
     fi
 
     # 2. firewalld
-    if command -v firewall-cmd &>/dev/null || systemctl is-active --quiet firewalld 2>/dev/null; then
+    if command_exists firewall-cmd || systemctl is-active --quiet firewalld 2>/dev/null; then
         msg_info "Disabling firewalld service..."
         systemctl disable --now firewalld &>/dev/null || true
     fi
 
     # 3. nftables
-    if command -v nft &>/dev/null || systemctl is-active --quiet nftables 2>/dev/null; then
+    if command_exists nft || systemctl is-active --quiet nftables 2>/dev/null; then
         msg_info "Flushing nftables rules and disabling service..."
         nft flush ruleset &>/dev/null || true
         systemctl disable --now nftables &>/dev/null || true
@@ -216,14 +216,15 @@ restore_backup() {
     fi
 
     if [[ -f /etc/default/grub ]]; then
-        if command -v update-grub &>/dev/null; then
+        if command_exists update-grub; then
             update-grub &>/dev/null || true
-        elif command -v grub-mkconfig &>/dev/null; then
+        elif command_exists grub-mkconfig; then
             grub-mkconfig -o /boot/grub/grub.cfg &>/dev/null || true
         fi
     fi
 
     local ssh_service="sshd"
+
     if systemctl list-unit-files | grep -q "^ssh\.service"; then
         ssh_service="ssh"
     fi
@@ -508,7 +509,7 @@ apply_hardware_hardening() {
 select_timezone() {
     msg_info "Configuring system timezone..."
 
-    if ! command -v timedatectl &>/dev/null; then
+    if ! command_exists timedatectl; then
         msg_warn "timedatectl is not available. Skipping timezone configuration."
         return 0
     fi
@@ -664,9 +665,9 @@ setup_apparmor() {
                 sed -i -E 's/GRUB_CMDLINE_LINUX_DEFAULT="(.*)"/GRUB_CMDLINE_LINUX_DEFAULT="\1 apparmor=1 lsm=landlock,lockdown,yama,integrity,apparmor"/' /etc/default/grub
 
                 msg_info "Updating GRUB configuration..."
-                if command -v update-grub &>/dev/null; then
+                if command_exists update-grub; then
                     update-grub
-                elif command -v grub-mkconfig &>/dev/null; then
+                elif command_exists grub-mkconfig; then
                     grub-mkconfig -o /boot/grub/grub.cfg
                 fi
 
@@ -675,20 +676,20 @@ setup_apparmor() {
                 msg_info "AppArmor parameters already present in /etc/default/grub. Pending reboot."
             fi
 
-        elif command -v bootctl &>/dev/null && bootctl status &>/dev/null; then
+        elif command_exists bootctl && bootctl status &>/dev/null; then
             msg_warn "systemd-boot detected. Please add options manually to your boot entry."
         else
             msg_warn "Manual intervention required for bootloader kernel options."
         fi
     fi
 
-    if command -v aa-enforce &>/dev/null; then
+    if command_exists aa-enforce; then
         msg_info "Setting all profiles in /etc/apparmor.d/ to enforce mode..."
         aa-enforce /etc/apparmor.d/* 2>/dev/null || true
         msg_success "AppArmor profiles set to enforce mode."
     fi
 
-    if command -v aa-status &>/dev/null; then
+    if command_exists aa-status; then
         print_separator
         msg_info "Current AppArmor Status Summary:"
         aa-status --short 2>/dev/null || aa-status 2>/dev/null | head -n 10

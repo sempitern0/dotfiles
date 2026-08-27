@@ -44,7 +44,7 @@ configure_bash_files() {
 configure_git() {
     print_section "Configuring Git"
 
-    if ! command -v git &>/dev/null; then
+    if ! command_exists git; then
         msg_error "Git binary not found in PATH. Please ensure it is installed in your distro setup script."
         return 1
     fi
@@ -86,7 +86,7 @@ configure_vim() {
 }
 
 configure_bat_symlink() {
-    if command -v batcat &>/dev/null; then
+    if command_exists batcat; then
         local batcat_path
         batcat_path=$(command -v batcat)
         local bin_dir="$TARGET_HOME/.local/bin"

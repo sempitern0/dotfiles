@@ -167,3 +167,4 @@ ensure_sudo_installed() {
         fi
     fi
 }
+

@@ -1,7 +1,13 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Contexto global
+# Log helpers
+msg_info()    { echo -e "\e[34m[INFO]\e[0m $*"; }
+msg_success() { echo -e "\e[32m[OK]\e[0m $*"; }
+msg_warn()    { echo -e "\e[33m[WARN]\e[0m $*"; }
+msg_error()   { echo -e "\e[31m[ERROR]\e[0m $*"; }
+
+# Global context
 TARGET_USER="${SUDO_USER:-$USER}"
 TARGET_HOME=$(getent passwd "$TARGET_USER" | cut -d: -f6)
 
@@ -58,21 +64,59 @@ USER_SERVICES=(
     "psd.service"           # Profile Sync Daemon (browser cache on RAM)
 )
 
+
+# Filter official packages using pacman -Si
+get_valid_pacman_packages() {
+    local valid=()
+    for pkg in "$@"; do
+        if pacman -Si "$pkg" &>/dev/null; then
+            valid+=("$pkg")
+        else
+            msg_warn "Official package '$pkg' was not found in repositories. Skipping..." >&2
+        fi
+    done
+    echo "${valid[@]}"
+}
+
+# Filter AUR packages using yay/paru -Si
+get_valid_aur_packages() {
+    local helper="$1"
+    shift
+    local valid=()
+
+    for pkg in "$@"; do
+        if [[ $EUID -eq 0 ]]; then
+            if sudo -u "$TARGET_USER" "$helper" -Si "$pkg" &>/dev/null; then
+                valid+=("$pkg")
+            else
+                msg_warn "AUR package '$pkg' was not found. Skipping..." >&2
+            fi
+        else
+            if "$helper" -Si "$pkg" &>/dev/null; then
+                valid+=("$pkg")
+            else
+                msg_warn "AUR package '$pkg' was not found. Skipping..." >&2
+            fi
+        fi
+    done
+    echo "${valid[@]}"
+}
+
 setup_user_and_sudo() {
-    # 1. Asegurar la presencia de sudo
+    # 1. Ensure presence of sudo
     if ! command -v sudo &>/dev/null; then
         msg_info "Installing 'sudo'..."
         pacman -S --needed --noconfirm sudo
     fi
 
-    # 2. Configurar el grupo wheel en /etc/sudoers.d/
+    # 2. Configure wheel group in /etc/sudoers.d/
     if [ ! -f /etc/sudoers.d/10-wheel ]; then
         msg_info "Configuring sudoers access for group 'wheel'..."
         echo "%wheel ALL=(ALL:ALL) ALL" > /etc/sudoers.d/10-wheel
         chmod 0440 /etc/sudoers.d/10-wheel
     fi
 
-    # 3. Gestionar la creación/asignación del usuario estándar
+    # 3. Manage standard user creation/assignment
     if [[ "$TARGET_USER" == "root" ]]; then
         echo ""
         read -r -p "Enter username for the standard user: " NEW_USER
@@ -93,7 +137,6 @@ setup_user_and_sudo() {
             msg_success "User '$NEW_USER' created and assigned to 'wheel' & 'users'."
         fi
 
-        # Actualizar variables de contexto global para el resto de funciones
         TARGET_USER="$NEW_USER"
         TARGET_HOME=$(getent passwd "$TARGET_USER" | cut -d: -f6)
     else
@@ -115,7 +158,6 @@ ensure_aur_helper() {
 
     msg_info "No AUR helper found. Installing 'yay-bin'..."
 
-    # Ensure base-devel and git are installed before trying to build
     pacman -S --needed --noconfirm base-devel git sudo &>/dev/null
 
     if [[ "$TARGET_USER" == "root" ]]; then
@@ -151,18 +193,25 @@ install_aur_packages() {
         return 0
     fi
 
-    msg_info "Detected ${#AUR_PACKAGES[@]} AUR packages to install."
+    msg_info "Detected ${#AUR_PACKAGES[@]} AUR packages to process."
     ensure_aur_helper || return 1
 
-    msg_info "Installing AUR packages through ${AUR_HELPER}..."
+    msg_info "Filtering available AUR packages via ${AUR_HELPER}..."
+    read -r -a VALID_AUR_PACKAGES <<< "$(get_valid_aur_packages "$AUR_HELPER" "${AUR_PACKAGES[@]}")"
 
-    if [[ $EUID -eq 0 ]]; then
-        sudo -u "$TARGET_USER" "$AUR_HELPER" -S --needed --noconfirm "${AUR_PACKAGES[@]}"
+    if [ ${#VALID_AUR_PACKAGES[@]} -gt 0 ] && [ -n "${VALID_AUR_PACKAGES[0]:-}" ]; then
+        msg_info "Installing ${#VALID_AUR_PACKAGES[@]} valid AUR packages..."
+
+        if [[ $EUID -eq 0 ]]; then
+            sudo -u "$TARGET_USER" "$AUR_HELPER" -S --needed --noconfirm "${VALID_AUR_PACKAGES[@]}"
+        else
+            "$AUR_HELPER" -S --needed --noconfirm "${VALID_AUR_PACKAGES[@]}"
+        fi
+
+        msg_success "AUR packages installed successfully."
     else
-        "$AUR_HELPER" -S --needed --noconfirm "${AUR_PACKAGES[@]}"
+        msg_warn "No valid AUR packages available to install."
     fi
-
-    msg_success "AUR packages installed successfully."
 }
 
 install_system_packages() {
@@ -183,12 +232,19 @@ install_system_packages() {
     fi
 
     if [ ${#PACKAGES[@]} -gt 0 ]; then
-        msg_info "Installing ${#PACKAGES[@]} packages..."
-        if "${INSTALL_CMD[@]}" "${PACKAGES[@]}"; then
-            msg_success "All packages installed successfully!"
+        msg_info "Filtering available official packages..."
+        read -r -a VALID_PACKAGES <<< "$(get_valid_pacman_packages "${PACKAGES[@]}")"
+
+        if [ ${#VALID_PACKAGES[@]} -gt 0 ] && [ -n "${VALID_PACKAGES[0]:-}" ]; then
+            msg_info "Installing ${#VALID_PACKAGES[@]} valid official packages..."
+            if "${INSTALL_CMD[@]}" "${VALID_PACKAGES[@]}"; then
+                msg_success "All official packages installed successfully!"
+            else
+                msg_error "An error happened installing one or more packages."
+                return 1
+            fi
         else
-            msg_error "An error happened installing one or more packages."
-            return 1
+            msg_warn "No valid official packages available to install."
         fi
     fi
 
@@ -286,18 +342,14 @@ EOF
 configure_portable_initramfs() {
     msg_info "Configuring initramfs for universal hardware support..."
 
-    # Handle mkinitcpio configuration (Standard Arch Linux default)
     if [ -f /etc/mkinitcpio.conf ]; then
         msg_info "Detected mkinitcpio. Disabling host autodetect..."
         
-        # Create a backup of the original configuration
         cp /etc/mkinitcpio.conf /etc/mkinitcpio.conf.bak
 
-        # Remove the 'autodetect' hook to include all storage, GPU, and USB drivers
         sed -i -E 's/\bautodetect\b//g' /etc/mkinitcpio.conf
-        sed -i 's/  */ /g' /etc/mkinitcpio.conf  # Clean up duplicate spaces
+        sed -i 's/  */ /g' /etc/mkinitcpio.conf
 
-        # Rebuild initramfs images for all installed kernels
         msg_info "Rebuilding initramfs images with mkinitcpio..."
         if mkinitcpio -P &>/dev/null; then
             msg_success "mkinitcpio configured successfully for portable booting."
@@ -306,17 +358,13 @@ configure_portable_initramfs() {
         fi
     fi
 
-    # Handle Dracut configuration (Default in recent EndeavourOS releases)
     if [ -d /etc/dracut.conf.d ]; then
         msg_info "Detected Dracut. Disabling host-only mode..."
 
-        # Create a configuration drop-in to force generic image generation
         cat <<EOF > /etc/dracut.conf.d/portable.conf
-# Disable host-only mode to build a generic image compatible with any hardware
 hostonly="no"
 EOF
 
-        # Rebuild all Dracut images
         msg_info "Rebuilding initramfs images with Dracut..."
         if dracut --regenerate-all --force &>/dev/null; then
             msg_success "Dracut configured successfully for portable booting."
@@ -326,9 +374,10 @@ EOF
     fi
 }
 
-# Flujo principal de ejecución
+# Main execution flow
 setup_user_and_sudo
 install_system_packages
 configure_reflector
 install_aur_packages
 enable_systemd_services
+configure_portable_initramfs

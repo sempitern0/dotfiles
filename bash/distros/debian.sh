@@ -7,6 +7,11 @@ TARGET_HOME=$(getent passwd "$TARGET_USER" | cut -d: -f6)
 export DEBIAN_FRONTEND=noninteractive
 PACKAGE_MANAGER="apt"
 
+msg_info()    { echo -e "\e[34m[INFO]\e[0m $*"; }
+msg_success() { echo -e "\e[32m[OK]\e[0m $*"; }
+msg_warn()    { echo -e "\e[33m[WARN]\e[0m $*"; }
+msg_error()   { echo -e "\e[31m[ERROR]\e[0m $*"; }
+
 PPA_REPOS=(
     "ppa:zhangsongcui3371/fastfetch"
 )
@@ -16,7 +21,7 @@ PACKAGES=(
     build-essential software-properties-common lsb-release
     htop iftop bat fastfetch jq fzf ripgrep fd-find ncdu duf micro
     inetutils-traceroute net-tools nmap lynis chkrootkit whatweb ufw
-    bluez bluez-tools ntpsec zram-tools
+    bluez bluez-tools ntpsec zram-tools man-pages
 )
 
 GUI_PACKAGES=(
@@ -32,14 +37,25 @@ SYSTEM_SERVICES=(
 
 USER_SERVICES=()
 
-# Comandos de APT
+# APT commands
 INSTALL_CMD=("${PACKAGE_MANAGER}" "install" "-y" "-q")
 UPDATE_CMD=("${PACKAGE_MANAGER}" "update" "-q")
 UPGRADE_CMD=("${PACKAGE_MANAGER}" "-y" "-o" "Dpkg::Options::=--force-confdef" "-o" "Dpkg::Options::=--force-confold" "upgrade")
 CLEANUP_CMD=("${PACKAGE_MANAGER}" "autoremove" "-y" "--purge")
 REPO_CMD=("add-apt-repository" "-y")
 
-msg_info "Preparing DEBIAN environment for user: ${TARGET_USER} (${TARGET_HOME})..."
+# Return valid packages via stdout while routing warnings to stderr
+get_valid_packages() {
+    local valid=()
+    for pkg in "$@"; do
+        if apt-cache show "$pkg" &>/dev/null; then
+            valid+=("$pkg")
+        else
+            msg_warn "Package '$pkg' was not found in repositories. Skipping..." >&2
+        fi
+    done
+    echo "${valid[@]}"
+}
 
 install_system_packages() {
     if [ ${#UPDATE_CMD[@]} -gt 0 ]; then
@@ -47,15 +63,16 @@ install_system_packages() {
         "${UPDATE_CMD[@]}" || return 1
     fi
 
-    # Instalar prerrequisitos para la gestión de repositorios externos
+    # Install prerequisites for external repositories
     if [ -n "${PPA_REPOS+x}" ] && [ ${#PPA_REPOS[@]} -gt 0 ]; then
         msg_info "Installing prerequisites for external repositories..."
-        "${INSTALL_CMD[@]}" software-properties-common &>/dev/null
+        "${INSTALL_CMD[@]}" software-properties-common &>/dev/null || true
         
         for repo in "${PPA_REPOS[@]}"; do
             msg_info "Adding repository: ${repo}"
             "${REPO_CMD[@]}" "${repo}" &>/dev/null || msg_warn "Failed to add ${repo}"
         done
+        
         "${UPDATE_CMD[@]}" &>/dev/null
     fi
 
@@ -64,19 +81,28 @@ install_system_packages() {
         "${UPGRADE_CMD[@]}" &>/dev/null
     fi
 
-    # Merge de paquetes GUI si se detecta un entorno gráfico
+    # Merge GUI packages if a desktop environment is detected
     if ! is_server_environment; then
         msg_info "Desktop environment detected. Adding GUI packages..."
         PACKAGES+=("${GUI_PACKAGES[@]}")
     fi
 
     if [ ${#PACKAGES[@]} -gt 0 ]; then
-        msg_info "Installing ${#PACKAGES[@]} packages..."
-        if "${INSTALL_CMD[@]}" "${PACKAGES[@]}"; then
-            msg_success "All packages installed successfully!"
+        msg_info "Filtering available packages..."
+        
+        # Populate array with validated package output
+        read -r -a VALID_PACKAGES <<< "$(get_valid_packages "${PACKAGES[@]}")"
+
+        if [ ${#VALID_PACKAGES[@]} -gt 0 ] && [ -n "${VALID_PACKAGES[0]:-}" ]; then
+            msg_info "Installing ${#VALID_PACKAGES[@]} valid packages..."
+            if "${INSTALL_CMD[@]}" "${VALID_PACKAGES[@]}"; then
+                msg_success "All packages installed successfully!"
+            else
+                msg_error "An error happened installing one or more packages."
+                return 1
+            fi
         else
-            msg_error "An error happened installing one or more packages."
-            return 1
+            msg_warn "No valid packages available to install."
         fi
     fi
 
@@ -116,5 +142,6 @@ enable_systemd_services() {
     fi
 }
 
+msg_info "Preparing DEBIAN environment for user: ${TARGET_USER} (${TARGET_HOME})..."
 install_system_packages
 enable_systemd_services
