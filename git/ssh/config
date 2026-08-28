@@ -9,9 +9,6 @@ Host me.github.com
     ServerAliveInterval 60
     ServerAliveCountMax 5
     HostKeyAlgorithms ssh-ed25519,ecdsa-sha2-nistp256
-    ControlMaster auto
-    ControlPath ~/.ssh/sockets/%r@%h:%p
-    ControlPersist 10m
-
+    
     IgnoreUnknown UseKeychain
     UseKeychain yes
