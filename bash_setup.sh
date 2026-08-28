@@ -66,6 +66,8 @@ configure_git() {
     local ssh_dir="$TARGET_HOME/.ssh"
     local ssh_dest="$ssh_dir/config"
 
+    mkdir -p ~/.ssh/sockets
+    
     if [[ -f "$ssh_src" ]]; then
         msg_info "Copying SSH configuration..."
 
