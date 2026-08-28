@@ -1,6 +1,22 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# ==============================================================================
+# SCRIPT: httpcheck
+# OBJECTIVE: HTTP endpoint auditing, redirect tracing, and security headers analysis.
+#
+# USAGE:
+#   httpcheck <domain_or_url>
+#   Example: httpcheck example.com  OR  httpcheck https://example.com/login
+#
+# EXTRACTED INFORMATION:
+#   - DNS pre-check & IP resolution to confirm host existence.
+#   - HTTP redirect chain, status codes, and total response time (latency).
+#   - Web server technology detection (Server, X-Powered-By, Content-Type).
+#   - Security headers audit (HSTS, CSP, X-Frame-Options, Referrer-Policy, etc.).
+#   - Dynamic User-Agent rotation to bypass basic WAF/bot restrictions.
+# ==============================================================================
+
 # Output color definitions
 CYAN='\033[0;36m'
 GREEN='\033[0;32m'

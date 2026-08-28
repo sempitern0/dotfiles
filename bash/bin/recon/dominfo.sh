@@ -1,6 +1,20 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# ==============================================================================
+# SCRIPT: dominfo
+# OBJECTIVE: Quick domain reconnaissance and DNS/WHOIS status verification.
+#
+# USAGE:
+#   dominfo <domain_name>
+#   Example: dominfo example.com
+#
+# EXTRACTED INFORMATION:
+#   - Domain registration details (WHOIS data, registrar, expiration dates).
+#   - DNS record resolution (A, AAAA, MX, NS records).
+#   - IP address mapping and basic domain reachability.
+# ==============================================================================
+
 # Output color definitions
 CYAN='\033[0;36m'
 GREEN='\033[0;32m'
