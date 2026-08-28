@@ -100,4 +100,3 @@ Dockerfile      text eol=lf
 *.sqlite        binary
 *.sqlite3       binary
 *.db            binary
-

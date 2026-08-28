@@ -108,7 +108,7 @@ fi
 
 alias cachefonts='fc-cache -f -v'
 alias logs="journalctl -xf"
-alias journal-err='journalctl -p 3 -xb'
+alias journalerr='journalctl -p 3 -xb'
 
 # --- Systemd ---
 alias failed='systemctl --failed'

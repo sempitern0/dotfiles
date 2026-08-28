@@ -26,7 +26,7 @@ CLEANUP_CMD=(
 PACKAGES=(
     coreutils man-db man-pages curl wget ca-certificates tree vim git
     htop iftop bat fastfetch jq fzf ripgrep inetutils 
-    traceroute net-tools nmap lynis bluez bluez-utils bluez-deprecated-tools 
+    traceroute net-tools bind whois nmap lynis bluez bluez-utils bluez-deprecated-tools 
     ntp reflector intel-ucode amd-ucode linux-firmware sof-firmware
     alsa-firmware mesa vulkan-intel vulkan-radeon vulkan-mesa-layers
     xf86-video-amdgpu xf86-video-ati xf86-video-nouveau xf86-video-intel

@@ -19,8 +19,8 @@ PACKAGES=(
     build-essential software-properties-common lsb-release jq fzf
     htop iftop btop bat ripgrep fd-find ncdu duf micro
     inetutils-traceroute net-tools mtr dnsutils psmisc lsof
-    nmap lynis chkrootkit whatweb ufw tcpdump tshark
-    bluez bluez-tools ntpsec zram-tools
+    nmap whois lynis chkrootkit whatweb ufw tcpdump tshark
+    bluez bluez-tools ntpsec zram-tools 
 )
 
 GUI_PACKAGES=(

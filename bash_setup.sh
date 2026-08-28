@@ -135,6 +135,38 @@ configure_bat_symlink() {
     fi
 }
 
+configure_custom_commands() {
+    print_section "Configuring Custom System Commands"
+
+    local tools_src_dir="$CURRENT_DIR/bash/bin"
+    local bin_dest_dir="$TARGET_HOME/.local/bin"
+
+    if [[ ! -d "$tools_src_dir" ]]; then
+        msg_warn "Source directory '$tools_src_dir' not found. Skipping custom commands setup."
+        return 0
+    fi
+
+    sudo -u "$TARGET_USER" mkdir -p "$bin_dest_dir"
+
+    msg_info "Scanning recursively for scripts in '$tools_src_dir'..."
+
+    while IFS= read -r -d '' tool_path; do
+        local tool_file
+        tool_file=$(basename "$tool_path")
+
+        local command_name="${tool_file%.sh}"
+        local dest_link="$bin_dest_dir/$command_name"
+
+        # Otorgar permisos de ejecución al script fuente
+        chmod +x "$tool_path"
+
+        msg_info "Creating symlink: '$command_name' -> '$dest_link' (from ${tool_path#$tools_src_dir/})"
+        sudo -u "$TARGET_USER" ln -sf "$tool_path" "$dest_link"
+    done < <(find "$tools_src_dir" -type f \( -name "*.sh" -o -perm /111 \) -print0)
+
+    msg_success "Custom commands successfully linked to '$bin_dest_dir'!"
+}
+
 # ------------------------------------------------------------------------------
 # MAIN EXECUTION
 # ------------------------------------------------------------------------------
@@ -172,6 +204,7 @@ main() {
     configure_git
     configure_vim
     configure_bat_symlink
+    configure_custom_commands
 
     print_section "Setup Complete"
     msg_success "The environment is ready to use!"

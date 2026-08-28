@@ -15,6 +15,7 @@ setterm --blength 0 > /dev/null 2>&1
 # https://unix.stackexchange.com/questions/545045/what-is-the-difference-between-ixon-and-ixoff-tty-attributes
 stty -ixon
 
+
 export EDITOR='vim'
 export VISUAL='vim'
 
@@ -162,3 +163,5 @@ else
 fi
 
 PS1='\[\e[90m\][\t] \[\e[31m\]${__STATUS_SEG}\[\e[34m\]\u\[\e[0m\]@\[\e[32m\]\h\[\e[0m\]:\[\e[36m\]${__SAFE_PWD}\[\e[33m\]${__GIT_SEG}\[\e[0m\]\$ '
+
+export PATH="$HOME/.local/bin:$PATH"
