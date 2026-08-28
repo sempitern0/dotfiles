@@ -1,5 +1,10 @@
 # ~/.bashrc: executed by bash(1) for non-login shells.
 
+# Ensure ~/.local/bin is in PATH
+if [[ ":$PATH:" != *":$HOME/.local/bin:"* ]]; then
+    export PATH="$HOME/.local/bin:$PATH"
+fi
+
 # If not running interactively, don't do anything
 case $- in
     *i*) ;;
@@ -130,7 +135,7 @@ __GIT_SEG=''
 
 __update_prompt_vars() {
   local last_status=$?
-  
+
   if [ $last_status -ne 0 ]; then
     __STATUS_SEG='✘ '
   else
@@ -140,7 +145,7 @@ __update_prompt_vars() {
   __SAFE_PWD=$(sanitize "$PWD")
 
   local G=/usr/bin/git b
-  PATH=/usr/bin:/bin
+  local PATH=/usr/bin:/bin 
 
   if [ -x "$G" ] && b=$("$G" rev-parse --abbrev-ref HEAD 2>/dev/null); then
     b=$(sanitize "$b")
@@ -163,5 +168,3 @@ else
 fi
 
 PS1='\[\e[90m\][\t] \[\e[31m\]${__STATUS_SEG}\[\e[34m\]\u\[\e[0m\]@\[\e[32m\]\h\[\e[0m\]:\[\e[36m\]${__SAFE_PWD}\[\e[33m\]${__GIT_SEG}\[\e[0m\]\$ '
-
-export PATH="$HOME/.local/bin:$PATH"
