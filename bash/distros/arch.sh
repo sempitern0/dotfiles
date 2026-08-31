@@ -10,6 +10,7 @@ msg_error()   { echo -e "\e[31m[ERROR]\e[0m $*"; }
 # Global context
 TARGET_USER="${SUDO_USER:-$USER}"
 TARGET_HOME=$(getent passwd "$TARGET_USER" | cut -d: -f6)
+SYSTEM_LOCALE="${SYSTEM_LOCALE:-es_ES.UTF-8}"
 
 PACKAGE_MANAGER="pacman"
 AUR_HELPER=""
@@ -24,14 +25,14 @@ CLEANUP_CMD=(
 
 # Essential CLI tools
 PACKAGES=(
-    coreutils man-db man-pages curl wget ca-certificates tree vim git
-    htop iftop bat fastfetch jq fzf ripgrep inetutils 
+    coreutils man-db man-pages curl wget ca-certificates tree git
+    htop iftop bat fastfetch jq fzf ripgrep inetutils vim
     traceroute net-tools bind whois nmap lynis bluez bluez-utils bluez-deprecated-tools 
     ntp reflector intel-ucode amd-ucode linux-firmware sof-firmware
     alsa-firmware mesa vulkan-intel vulkan-radeon vulkan-mesa-layers
     xf86-video-amdgpu xf86-video-ati xf86-video-nouveau xf86-video-intel
     dosfstools ntfs-3g exfatprogs mtools udisks2 wireless-regdb
-    usb_modeswitch mobile-broadband-provider-info usbmuxd
+    usb_modeswitch mobile-broadband-provider-info usbmuxd go
 )
 
 # Graphical tools
@@ -44,7 +45,6 @@ AUR_PACKAGES=(
     auto-cpufreq
     downgrade
     pacseek-bin   
-    librewolf-bin   
     czkawka-cli-bin
     chkrootkit 
     whatweb
@@ -130,7 +130,7 @@ setup_user_and_sudo() {
             usermod -aG wheel,users,storage,power "$NEW_USER"
         else
             msg_info "Creating user '$NEW_USER'..."
-            useradd -m -g users -G wheel,storage,power -s /bin/bash "$NEW_USER"
+            useradd -m -U -G wheel,storage,power -s /bin/bash "$NEW_USER"
             
             msg_info "Set password for $NEW_USER:"
             passwd "$NEW_USER"
@@ -253,7 +253,6 @@ install_system_packages() {
         "${CLEANUP_CMD[@]}" &> /dev/null || true
     fi
 }
-
 enable_systemd_services() {
     msg_info "Enabling system-level services..."
 
@@ -274,8 +273,17 @@ enable_systemd_services() {
         local target_uid
         target_uid=$(id -u "$TARGET_USER")
 
+        loginctl enable-linger "$TARGET_USER" 2>/dev/null || true
+
+        if command -v psd &>/dev/null; then
+            sudo -u "$TARGET_USER" psd parse &>/dev/null || true
+        fi
+
         for user_service in "${USER_SERVICES[@]}"; do
-            if sudo -u "$TARGET_USER" XDG_RUNTIME_DIR="/run/user/${target_uid}" systemctl --user enable "$user_service" &>/dev/null; then
+            if sudo -u "$TARGET_USER" \
+                XDG_RUNTIME_DIR="/run/user/${target_uid}" \
+                DBUS_SESSION_BUS_ADDRESS="unix:path=/run/user/${target_uid}/bus" \
+                systemctl --user enable "$user_service" &>/dev/null; then
                 msg_success "Enabled user service: ${user_service}"
             else
                 msg_error "Failed to enable user service: ${user_service}"
@@ -339,6 +347,24 @@ EOF
     return 0
 }
 
+configure_locale() {
+    msg_info "Configuring system locale ($SYSTEM_LOCALE)..."
+
+    if [[ -f /etc/locale.gen ]]; then
+        sed -i -E "s/^#?\s*(${SYSTEM_LOCALE}\s+UTF-8)/\1/" /etc/locale.gen
+
+        msg_info "Generating locales..."
+        locale-gen &>/dev/null
+    else
+        msg_warn "/etc/locale.gen not found. Skipping locale-gen."
+    fi
+
+    echo "LANG=${SYSTEM_LOCALE}" > /etc/locale.conf
+    export LANG="${SYSTEM_LOCALE}"
+
+    msg_success "Locale '${SYSTEM_LOCALE}' successfully applied!"
+}
+
 configure_portable_initramfs() {
     msg_info "Configuring initramfs for universal hardware support..."
 
@@ -380,4 +406,5 @@ install_system_packages
 configure_reflector
 install_aur_packages
 enable_systemd_services
+configure_locale
 configure_portable_initramfs

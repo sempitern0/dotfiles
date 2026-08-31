@@ -20,7 +20,7 @@ PACKAGES=(
     htop iftop btop bat ripgrep fd-find ncdu duf micro
     inetutils-traceroute net-tools mtr dnsutils psmisc lsof
     nmap whois lynis chkrootkit whatweb ufw tcpdump tshark
-    bluez bluez-tools ntpsec zram-tools 
+    bluez bluez-tools ntpsec zram-tools golang-go
 )
 
 GUI_PACKAGES=(

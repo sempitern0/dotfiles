@@ -106,7 +106,7 @@ copy_with_backup() {
         if [[ ! -f "$backup_file" ]]; then
             msg_warn "Existing file found at '$dest'. Backing up to '$backup_file'..."
             cp -f "$dest" "$backup_file"
-            chown "$user:$user" "$backup_file"
+            chown "$user:" "$backup_file"
         else
             msg_info "Backup '$backup_file' already exists. Skipping backup creation to preserve the original."
         fi
@@ -114,7 +114,7 @@ copy_with_backup() {
 
     msg_info "Copying '$(basename "$src")' -> '$dest'..."
     cp -f "$src" "$dest"
-    chown "$user:$user" "$dest"
+    chown "$user:" "$dest" 
 }
 
 print_section() {

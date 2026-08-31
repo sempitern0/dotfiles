@@ -148,6 +148,9 @@ configure_custom_commands() {
 
     sudo -u "$TARGET_USER" mkdir -p "$bin_dest_dir"
 
+    msg_info "Cleaning up broken symlinks in '$bin_dest_dir'..."
+    find "$bin_dest_dir" -xtype l -delete 2>/dev/null || true
+
     msg_info "Scanning recursively for scripts in '$tools_src_dir'..."
 
     while IFS= read -r -d '' tool_path; do
@@ -157,8 +160,11 @@ configure_custom_commands() {
         local command_name="${tool_file%.sh}"
         local dest_link="$bin_dest_dir/$command_name"
 
-        # Otorgar permisos de ejecución al script fuente
-        chmod +x "$tool_path"
+        if is_wsl; then
+            chmod +x "$tool_path" 2>/dev/null || true
+        else
+            chmod +x "$tool_path"
+        fi
 
         msg_info "Creating symlink: '$command_name' -> '$dest_link' (from ${tool_path#$tools_src_dir/})"
         sudo -u "$TARGET_USER" ln -sf "$tool_path" "$dest_link"
@@ -208,8 +214,7 @@ main() {
 
     print_section "Setup Complete"
     msg_success "The environment is ready to use!"
-    #msg_info "Run 'exec bash' or restart your terminal to apply changes."
-
+    msg_info "Run 'exec bash' or 'source ~/.bashrc' or restart your terminal to apply changes."
 }
 
 main "$@"
