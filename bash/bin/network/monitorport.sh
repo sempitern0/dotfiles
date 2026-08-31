@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
 
+# Restore terminal cursor and reset color formatting on exit (SIGINT/SIGTERM)
 trap 'tput cnorm 2>/dev/null; printf "\e[0m\n"; exit 1' INT TERM
 
-# Validar que se hayan ingresado ambos parámetros (Host y Puerto)
+# Validate required arguments (Host and Port) or display help
 if [[ "$1" == "-h" || -z "$1" || -z "$2" ]]; then
   cat <<'EOF'
 SUMMARY:
@@ -25,16 +26,19 @@ PORT="$2"
 INTERVAL="${3:-1}"
 ctr=1
 
+# Hide terminal cursor during operation
 tput civis 2>/dev/null
 
 printf "\e[33mMonitoring %s:%s...\e[0m\n" "$HOST" "$PORT"
 
+# Poll target host and port until connection succeeds
 while ! nc -z -w 1 "$HOST" "$PORT" &> /dev/null; do
   printf "\r\e[31mWaiting for %s:%s (#%d)...\e[0m\e[K" "$HOST" "$PORT" "$ctr"
   ((ctr++))
   sleep "$INTERVAL"
 done
 
+# Restore terminal cursor on success
 tput cnorm 2>/dev/null
 
 printf "\r\e[32m[SUCCESS] %s:%s is now reachable! (#%d)\e[0m\e[K\n" "$HOST" "$PORT" "$ctr"
