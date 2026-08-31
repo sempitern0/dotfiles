@@ -1,5 +1,9 @@
 # ~/.bash.aliases - Modernized & Hardened
 
+# Quick tar compress/decompress with progress
+alias qcompress='tar -cvzf'
+alias qdecompress='tar -xvzf'
+
 # --- Shell & Navigation ---
 alias refresh='source ~/.bashrc'
 alias path='echo "$PATH" | tr ":" "\n"'
@@ -55,6 +59,7 @@ alias icat='kitty +kitten icat'
 
 # --- Networking & Ports (Modern netstat replacement) ---
 alias openports='ss -tulpn'
+alias lsockets='sudo ss -tulpn | grep LISTEN'
 alias listen='ss -tulnp'
 alias netcon="ss -ntu | awk '{print \$5}' | cut -d: -f1 | sort | uniq -c | sort -nr"
 alias myip="curl -s https://ifconfig.me; echo ''; ip -brief -4 address"
@@ -93,6 +98,13 @@ alias count='find . -type f | wc -l'
 # cpv /ruta/archivo_grande.iso /media/usb/
 # cpv -r carpeta_origen/ /media/backup/
 alias cpv='rsync -ah --info=progress2'
+alias rsync-copy='rsync -aHAXvh --info=progress2'
+alias rsync-move='rsync -aHAXvh --remove-source-files --info=progress2'
+alias rsync-update='rsync -uavh --info=progress2'
+alias rsync-mirror='rsync -aHAXvh --delete --info=progress2'
+
+# Backup web root or database dumps fast
+alias mirror-site='rsync -aHAXZvh --exclude=".git" --delete --info=progress2'
 
 alias shredd='shred -uzv -n 10'
 alias dropcache='sudo sync; echo 3 | sudo tee /proc/sys/vm/drop_caches'
@@ -113,6 +125,7 @@ alias journalerr='journalctl -p 3 -xb'
 # --- Systemd ---
 alias failed='systemctl --failed'
 alias ufailed='systemctl --user --failed'
+alias failedlogins='sudo journalctl -u sshd -u systemd-logind | grep -i "failed"'
 
 # --- Long-running command alerts ---
 # sudo apt update && sudo apt upgrade -y; alert
