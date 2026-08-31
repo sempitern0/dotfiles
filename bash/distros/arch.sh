@@ -293,54 +293,82 @@ enable_systemd_services() {
 }
 
 configure_reflector() {
-    if ! command -v reflector &>/dev/null; then
-        msg_info "Reflector is not installed. Skipping mirror setup."
+    print_section "Configuring Pacman Mirrors with Reflector"
+
+    if ! command_exists reflector; then
+        msg_info "Reflector binary not found. Skipping mirror setup."
         return 0
     fi
 
-    msg_info "Configuring optimal pacman mirrors with Reflector..."
+    msg_info "Detecting location and configuring optimal pacman mirrors..."
 
-    local country=""
+    local primary_country=""
+    local country_list=""
 
+    # 1. Detect primary country code
     local current_tz
     current_tz=$(timedatectl show --property=Timezone --value 2>/dev/null || true)
 
     if [[ -n "$current_tz" && -f /usr/share/zoneinfo/zone1970.tab ]]; then
-        country=$(awk -v tz="$current_tz" '$0 !~ /^#/ && $3 == tz {print $1}' /usr/share/zoneinfo/zone1970.tab 2>/dev/null | cut -d',' -f1 || true)
+        primary_country=$(awk -v tz="$current_tz" '$0 !~ /^#/ && $3 == tz {print $1}' /usr/share/zoneinfo/zone1970.tab 2>/dev/null | cut -d',' -f1 || true)
     fi
 
-    if [[ -z "$country" ]]; then
-        country=$(curl -s --max-time 3 https://ipapi.co/country/ 2>/dev/null || true)
+    if [[ -z "$primary_country" ]]; then
+        primary_country=$(curl -s --max-time 3 https://ipapi.co/country/ 2>/dev/null || true)
     fi
 
-    if [[ -z "$country" ]]; then
-        country=$(curl -s --max-time 3 "http://ip-api.com/line/?fields=countryCode" 2>/dev/null || true)
+    if [[ -z "$primary_country" ]]; then
+        primary_country=$(curl -s --max-time 3 "http://ip-api.com/line/?fields=countryCode" 2>/dev/null || true)
     fi
 
-    country=$(echo "$country" | tr -d '[:space:]')
+    primary_country=$(echo "$primary_country" | tr -d '[:space:]' | tr '[:lower:]' '[:upper:]')
 
-    if [[ -n "$country" ]]; then
-        msg_info "Updating mirrors using country code: $country..."
-        if ! reflector --country "$country" --protocol https --latest 15 --sort rate --save /etc/pacman.d/mirrorlist &>/dev/null; then
-            msg_warn "Filtering by country '$country' failed. Testing global mirrors..."
-            reflector --protocol https --latest 20 --download-timeout 5 --sort rate --save /etc/pacman.d/mirrorlist &>/dev/null || msg_warn "Network unavailable or Reflector failed. Keeping default mirrorlist."
+    # 2. Map primary country to regional fallback lists
+    case "$primary_country" in
+        ES) country_list="ES,FR,PT,DE" ;;
+        MX) country_list="MX,US,CA" ;;
+        AR|CL|DE|FR|IT|GB) country_list="${primary_country},DE,FR,NL" ;;
+        US|CA) country_list="US,CA" ;;
+        "") country_list="" ;;
+        *)  country_list="${primary_country},DE,US" ;; # Generic fallback for unlisted countries
+    esac
+
+    # 3. Execute Reflector with strict timeouts
+    local reflector_flags=(
+        "--protocol" "https"
+        "--latest" "20"
+        "--connection-timeout" "3"
+        "--download-timeout" "5"
+        "--sort" "rate"
+        "--save" "/etc/pacman.d/mirrorlist"
+    )
+
+    if [[ -n "$country_list" ]]; then
+        msg_info "Updating mirrors using primary and fallback countries: $country_list..."
+        if ! reflector --country "$country_list" "${reflector_flags[@]}"; then
+            msg_warn "Country-filtered search ($country_list) failed. Falling back to global mirrors..."
+            reflector "${reflector_flags[@]}" || msg_warn "Network issue or Reflector execution failed. Keeping default mirrorlist."
         else
-            msg_success "Mirrors updated successfully for country code '$country'."
+            msg_success "Mirrors successfully updated for regions ($country_list)."
         fi
     else
         msg_info "Country code unavailable. Fetching fastest global mirrors..."
-        reflector --protocol https --latest 20 --download-timeout 5 --sort rate --save /etc/pacman.d/mirrorlist &>/dev/null || msg_warn "Network unavailable or Reflector failed. Keeping default mirrorlist."
+        reflector "${reflector_flags[@]}" || msg_warn "Network issue or Reflector execution failed. Keeping default mirrorlist."
     fi
 
+    # 4. Sync configuration file for reflector service
     if [[ -f /etc/reflector.conf ]]; then
+        msg_info "Updating /etc/reflector.conf..."
         cat <<EOF > /etc/reflector.conf
 --save /etc/pacman.d/mirrorlist
 --protocol https
---latest 15
+--latest 20
+--connection-timeout 3
+--download-timeout 5
 --sort rate
 EOF
-        if [[ -n "$country" ]]; then
-            echo "--country '$country'" >> /etc/reflector.conf
+        if [[ -n "$country_list" ]]; then
+            echo "--country $country_list" >> /etc/reflector.conf
         fi
     fi
 

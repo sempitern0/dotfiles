@@ -20,6 +20,11 @@ setterm --blength 0 > /dev/null 2>&1
 # https://unix.stackexchange.com/questions/545045/what-is-the-difference-between-ixon-and-ixoff-tty-attributes
 stty -ixon
 
+export LANG="${LANG:-es_ES.UTF-8}"
+# Export LC_ALL only if specifically defined to prevent Perl locale warnings
+if [ -n "${LC_ALL:-}" ]; then
+    export LC_ALL
+fi
 
 export EDITOR='vim'
 export VISUAL='vim'

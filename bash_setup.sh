@@ -135,6 +135,73 @@ configure_bat_symlink() {
     fi
 }
 
+configure_tor() {
+    print_section "Configuring Tor and Torsocks"
+
+    # Install Tor and Torsocks based on the available package manager
+    if command_exists apt-get; then
+        msg_info "Installing Tor and Torsocks via apt..."
+        apt-get update -y
+        apt-get install -y tor torsocks
+    elif command_exists pacman; then
+        msg_info "Installing Tor and Torsocks via pacman..."
+        pacman -Sy --noconfirm tor torsocks
+    else
+        msg_error "Unsupported package manager. Unable to install Tor and Torsocks."
+        return 1
+    fi
+
+    # --- Deploy /etc/tor/torrc ---
+    local torrc="/etc/tor/torrc"
+    msg_info "Deploying hardened Tor client configuration..."
+
+    if [[ -f "$torrc" ]]; then
+        cp "$torrc" "${torrc}.bak" 2>/dev/null || true
+    fi
+
+    cat << 'EOF' > "$torrc"
+# Hardened Tor Client Configuration
+SocksPort 127.0.0.1:9050
+SocksPolicy accept 127.0.0.1
+SocksPolicy reject *
+
+# Prevent DNS leaks
+DNSPort 127.0.0.1:5353
+
+# Circuit isolation per application/request
+IsolateClientAddr 1
+IsolateSOCKSAuth 1
+
+# Process hardening options
+DataDirectory /var/lib/tor
+RunAsDaemon 1
+EOF
+    chmod 644 "$torrc"
+
+    local torsocks_conf="/etc/tor/torsocks.conf"
+    msg_info "Deploying Torsocks wrapper configuration..."
+
+    if [[ -f "$torsocks_conf" ]]; then
+        cp "$torsocks_conf" "${torsocks_conf}.bak" 2>/dev/null || true
+    fi
+
+    cat << 'EOF' > "$torsocks_conf"
+# Hardened Torsocks Configuration
+TorAddress 127.0.0.1
+TorPort 9050
+OnL2FTN Reject
+IsolatePID 1
+EOF
+    chmod 644 "$torsocks_conf"
+
+    msg_info "Enabling and starting Tor system service..."
+    systemctl daemon-reload
+    systemctl enable --now tor
+
+    msg_success "Tor and Torsocks installed, configured, and service started successfully!"
+}
+
+
 configure_custom_commands() {
     print_section "Configuring Custom System Commands"
 
@@ -211,6 +278,7 @@ main() {
     configure_vim
     configure_bat_symlink
     configure_custom_commands
+    configure_tor
 
     print_section "Setup Complete"
     msg_success "The environment is ready to use!"
