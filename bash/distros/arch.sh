@@ -430,9 +430,9 @@ EOF
 
 # Main execution flow
 setup_user_and_sudo
+configure_locale
 install_system_packages
 configure_reflector
 install_aur_packages
 enable_systemd_services
-configure_locale
 configure_portable_initramfs

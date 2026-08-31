@@ -134,18 +134,21 @@ configure_bat_symlink() {
         fi
     fi
 }
-
 configure_tor() {
     print_section "Configuring Tor and Torsocks"
+
+    local tor_user="tor"
 
     # Install Tor and Torsocks based on the available package manager
     if command_exists apt-get; then
         msg_info "Installing Tor and Torsocks via apt..."
         apt-get update -y
         apt-get install -y tor torsocks
+        tor_user="debian-tor"
     elif command_exists pacman; then
         msg_info "Installing Tor and Torsocks via pacman..."
         pacman -Sy --noconfirm tor torsocks
+        tor_user="tor"
     else
         msg_error "Unsupported package manager. Unable to install Tor and Torsocks."
         return 1
@@ -159,25 +162,28 @@ configure_tor() {
         cp "$torrc" "${torrc}.bak" 2>/dev/null || true
     fi
 
+    # Note: RunAsDaemon is omitted because systemd manages process daemonization
     cat << 'EOF' > "$torrc"
 # Hardened Tor Client Configuration
-SocksPort 127.0.0.1:9050
+SocksPort 127.0.0.1:9050 IsolateClientAddr IsolateSOCKSAuth
 SocksPolicy accept 127.0.0.1
 SocksPolicy reject *
 
 # Prevent DNS leaks
 DNSPort 127.0.0.1:5353
 
-# Circuit isolation per application/request
-IsolateClientAddr 1
-IsolateSOCKSAuth 1
-
 # Process hardening options
 DataDirectory /var/lib/tor
-RunAsDaemon 1
 EOF
     chmod 644 "$torrc"
 
+    # --- Ensure correct directory permissions ---
+    msg_info "Setting secure permissions on /var/lib/tor..."
+    mkdir -p /var/lib/tor
+    chown -R "${tor_user}:${tor_user}" /var/lib/tor
+    chmod 700 /var/lib/tor
+
+    # --- Deploy /etc/tor/torsocks.conf ---
     local torsocks_conf="/etc/tor/torsocks.conf"
     msg_info "Deploying Torsocks wrapper configuration..."
 
@@ -194,13 +200,21 @@ IsolatePID 1
 EOF
     chmod 644 "$torsocks_conf"
 
+    # --- Verify Tor configuration syntax ---
+    msg_info "Verifying Tor configuration syntax..."
+    if ! sudo -u "$tor_user" tor --verify-config -f "$torrc" &>/dev/null; then
+        msg_error "Tor configuration validation failed."
+        return 1
+    fi
+
+    # --- Systemd Service Integration ---
     msg_info "Enabling and starting Tor system service..."
     systemctl daemon-reload
+    systemctl reset-failed tor.service 2>/dev/null || true
     systemctl enable --now tor
 
     msg_success "Tor and Torsocks installed, configured, and service started successfully!"
 }
-
 
 configure_custom_commands() {
     print_section "Configuring Custom System Commands"
