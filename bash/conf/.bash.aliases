@@ -62,7 +62,6 @@ alias openports='ss -tulpn'
 alias lsockets='sudo ss -tulpn | grep LISTEN'
 alias listen='ss -tulnp'
 alias netcon="ss -ntu | awk '{print \$5}' | cut -d: -f1 | sort | uniq -c | sort -nr"
-alias myip="curl -s https://ifconfig.me; echo ''; ip -brief -4 address"
 alias curltime='curl -o /dev/null -s -w "Connect: %{time_connect}s\nTTFB: %{time_starttransfer}s\nTotal: %{time_total}s\nStatus: %{http_code}\n"'
 
 # User-Agent Helpers

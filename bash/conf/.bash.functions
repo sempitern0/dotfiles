@@ -188,9 +188,44 @@ ipinfo() {
     curl -s "https://ipapi.co/${target}/json/" | grep -E '"ip"|"city"|"region"|"country_name"|"org"'
 }
 
+myip() {
+    # List of fallback URLs to retrieve public IP address
+    local urls=(
+        "https://ifconfig.me"
+        "https://icanhazip.com"
+        "https://api.ipify.org"
+        "https://ipinfo.io/ip"
+    )
+
+    local public_ip=""
+
+    # Iterate through services until a valid response is received (3s timeout per request)
+    for url in "${urls[@]}"; do
+        public_ip=$(curl -s --max-time 3 "$url")
+        if [ $? -eq 0 ] && [ -n "$public_ip" ]; then
+            break
+        fi
+        public_ip=""
+    done
+
+    # Display public IP results
+    echo "=== Public IP ==="
+    if [ -n "$public_ip" ]; then
+        echo "$public_ip"
+    else
+        echo "Public IP could not be obtained (all services failed)."
+    fi
+
+    # Display local network interface addresses
+    echo ""
+    echo "=== Local Interfaces (IPv4) ==="
+    ip -brief -4 address
+}
+
 # Quick local HTTP server on a specified port (default: 8000)
 server() {
     local port="${1:-8000}"
+
     if command -v python3 >/dev/null 2>&1; then
         echo "[+] Serving HTTP on 0.0.0.0 port $port..."
         python3 -m http.server "$port"
