@@ -17,7 +17,7 @@ PPA_REPOS=()
 PACKAGES=(
     coreutils man-db man-pages curl wget ca-certificates tree vim git sudo
     build-essential software-properties-common lsb-release jq fzf
-    htop iftop btop bat ripgrep fd-find ncdu duf micro
+    htop iftop btop bat ripgrep fd-find ncdu duf micro wamerican wspanish
     inetutils-traceroute net-tools mtr dnsutils psmisc lsof
     nmap whois lynis chkrootkit whatweb ufw tcpdump tshark
     bluez bluez-tools ntpsec zram-tools golang-go

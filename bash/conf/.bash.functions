@@ -250,6 +250,7 @@ fkill() {
     fi
 
     local pid
+    
     pid=$(ps -ef | sed 1d | fzf -m --header="Select process(es) to kill" | awk '{print $2}')
 
     if [ -n "$pid" ]; then
@@ -263,4 +264,55 @@ genpass() {
     local length="${1:-20}"
     openssl rand -base64 48 | tr -dc 'a-zA-Z0-9!@#$%^&*()_+' | head -c "$length"
     echo ""
+}
+
+# genpassphrase 6 | river-shadow-stone-planet-silver-winter
+# genpassphrase 5 . | cloud.signal.forest.rocket.amber
+# genpassphrase 4 - es | hola-amigos-que-tal
+
+genpassphrase() {
+    local word_count="${1:-4}"
+    local separator="${2:--}"
+    local target_lang="${3:-}"
+
+    # Auto-detect language if not explicitly provided
+    if [[ -z "$target_lang" ]]; then
+        local sys_locale="${LANG:-${LC_ALL:-}}"
+        if [[ "$sys_locale" =~ ^en ]]; then
+            target_lang="en"
+        else
+            target_lang="es"
+        fi
+    fi
+
+    local dict_file=""
+    local regex=""
+
+    # Normalize input language to lowercase and configure settings
+    case "${target_lang,,}" in
+        en|us|english)
+            dict_file="/usr/share/dict/american-english"
+            [[ ! -f "$dict_file" ]] && dict_file="/usr/share/dict/words"
+            regex='^[a-zA-Z]{3,8}$'
+            ;;
+        es|spanish|*)
+            # Spanish configuration (default fallback)
+            dict_file="/usr/share/dict/spanish"
+            [[ ! -f "$dict_file" ]] && dict_file="/usr/share/dict/words"
+            regex='^[a-zA-ZáéíóúÁÉÍÓÚñÑ]{3,8}$'
+            ;;
+    esac
+
+    # Ensure dictionary file exists
+    if [[ ! -f "$dict_file" ]]; then
+        echo "Error: Dictionary file not found at $dict_file" >&2
+        return 1
+    fi
+
+    # Filter words, strip accents/tildes via sed, pick randomly, convert to lowercase, and join
+    grep -E "$regex" "$dict_file" | \
+        sed 'y/áéíóúÁÉÍÓÚñÑ/aeiouAEIOUnN/' | \
+        shuf -n "$word_count" | \
+        tr '[:upper:]' '[:lower:]' | \
+        paste -sd "$separator" -
 }

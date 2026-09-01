@@ -26,7 +26,7 @@ CLEANUP_CMD=(
 # Essential CLI tools
 PACKAGES=(
     coreutils man-db man-pages curl wget ca-certificates tree git
-    htop iftop bat fastfetch jq fzf ripgrep inetutils vim
+    htop iftop bat fastfetch jq fzf ripgrep inetutils vim words words-es
     traceroute net-tools bind whois nmap lynis bluez bluez-utils bluez-deprecated-tools 
     ntp reflector intel-ucode amd-ucode linux-firmware sof-firmware
     alsa-firmware mesa vulkan-intel vulkan-radeon vulkan-mesa-layers
