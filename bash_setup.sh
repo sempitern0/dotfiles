@@ -216,6 +216,43 @@ EOF
     msg_success "Tor and Torsocks installed, configured, and service started successfully!"
 }
 
+## To restore the system use sudo timeshift --restor
+## By defaul timeshift exclude the user /home directory
+configure_system_snapshot() {
+    print_section "Creating System Snapshot"
+
+     if is_wsl; then
+        msg_error "WSL environment detected, aborting system snapshot..."
+        return 1
+    fi
+
+    if ! command_exists timeshift; then
+        msg_info "Timeshift is not installed. Attempting installation..."
+        if command_exists apt-get; then
+            apt-get update -y
+            apt-get install -y timeshift
+        elif command_exists pacman; then
+            pacman -Sy --noconfirm timeshift
+        else
+            msg_error "Unsupported package manager. Unable to install Timeshift."
+            return 1
+        fi
+    fi
+
+    local timestamp
+    timestamp=$(date +'%Y-%m-%d_%H-%M-%S')
+    local comment="Post-setup auto snapshot ($timestamp)"
+
+    msg_info "Generating system snapshot: '$comment'..."
+
+    if timeshift --create --comments "$comment" --tags D; then
+        msg_success "System snapshot created successfully!"
+    else
+        msg_error "Failed to create system snapshot."
+        return 1
+    fi
+}
+
 configure_custom_commands() {
     print_section "Configuring Custom System Commands"
 
@@ -254,10 +291,43 @@ configure_custom_commands() {
     msg_success "Custom commands successfully linked to '$bin_dest_dir'!"
 }
 
+cleanup() {
+    local exit_code=$?
+    msg_error "[!] Script execution interrupted by user (Ctrl + C). Cleaning up...${endColour}"
+
+   # --- Timeshift Locks ---
+    rm -f /var/run/timeshift.lock 2>/dev/null || true
+    rm -rf /tmp/timeshift* 2>/dev/null || true
+
+    # --- APT / DPKG Locks (Debian, Ubuntu, Kali, Mint) ---
+    rm -f /var/lib/dpkg/lock \
+          /var/lib/dpkg/lock-frontend \
+          /var/lib/apt/lists/lock \
+          /var/cache/apt/archives/lock 2>/dev/null || true
+
+    # --- Pacman Locks (Arch Linux, Manjaro, EndeavourOS) ---
+    rm -f /var/lib/pacman/db.lck 2>/dev/null || true
+
+    # --- DNF / YUM Locks (Fedora, RHEL, CentOS, AlmaLinux) ---
+    rm -f /var/run/dnf.lock \
+          /var/run/yum.pid \
+          /var/lib/dnf/lock 2>/dev/null || true
+
+    # --- Zypper Locks (openSUSE) ---
+    rm -f /var/run/zypp.pid 2>/dev/null || true
+
+    # --- Snapd & Flatpak Locks ---
+    rm -f /var/lib/snapd/state.json.lock 2>/dev/null || true
+    
+    msg_warn "Execution stopped. The next run will start fresh from the beginning."
+    exit "${exit_code:-1}"
+}
+
 # ------------------------------------------------------------------------------
 # MAIN EXECUTION
 # ------------------------------------------------------------------------------
 main() {
+
     if [[ $(uname -s) != "Linux" ]]; then
         msg_error "This script is only compatible with Linux distributions."
         exit 1
@@ -293,12 +363,14 @@ main() {
     configure_bat_symlink
     configure_custom_commands
     configure_tor
+    configure_system_snapshot
 
     print_section "Setup Complete"
     msg_success "The environment is ready to use!"
     msg_info "Run 'exec bash' or 'source ~/.bashrc' or restart your terminal to apply changes."
 }
 
+trap cleanup INT TERM
 main "$@"
 
 ## Auto source the terminal to see the changes

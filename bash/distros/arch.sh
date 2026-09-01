@@ -31,8 +31,8 @@ PACKAGES=(
     ntp reflector intel-ucode amd-ucode linux-firmware sof-firmware
     alsa-firmware mesa vulkan-intel vulkan-radeon vulkan-mesa-layers
     xf86-video-amdgpu xf86-video-ati xf86-video-nouveau xf86-video-intel
-    dosfstools ntfs-3g exfatprogs mtools udisks2 wireless-regdb
-    usb_modeswitch mobile-broadband-provider-info usbmuxd go
+    dosfstools ntfs-3g exfatprogs mtools udisks2 wireless-regdb timeshift
+    usb_modeswitch mobile-broadband-provider-info usbmuxd go zoxide
 )
 
 # Graphical tools

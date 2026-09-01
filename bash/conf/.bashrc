@@ -82,6 +82,11 @@ if command -v lesspipe >/dev/null 2>&1; then
   eval "$(SHELL=/bin/sh lesspipe)"
 fi
 
+# An intelligent substitute for cd
+if command -v zoxide >/dev/null 2>&1; then
+  eval "$(zoxide init bash --cmd cd)"
+fi
+
 # Color support for ls / grep
 if [ -x /usr/bin/dircolors ]; then
     test -r ~/.dircolors && eval "$(dircolors -b ~/.dircolors)" || eval "$(dircolors -b)"
