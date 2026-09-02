@@ -31,6 +31,11 @@ detect_package_manager() {
 }
 
 detect_distribution() {
+    if [[ "$(uname -s)" == "Darwin" ]]; then
+        echo "macos"
+        return 0
+    fi
+    
     if [[ ! -f /etc/os-release ]]; then
         msg_error "Distribution could not be identified (/etc/os-release does not exist)."
         exit 1
