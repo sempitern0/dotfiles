@@ -1,11 +1,13 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-local SSH_PORT="${SSH_PORT:-22}"
-local ALLOWED_SERVICES=("80/tcp" "443/tcp")
+# Global default variables
+SSH_PORT="${SSH_PORT:-22}"
+UFW_BEFORE_RULES="${UFW_BEFORE_RULES:-/etc/ufw/before.rules}"
+ALLOWED_SERVICES=("80/tcp" "443/tcp")
 
 apply_before_ufw_rules() {
-    msg_info "Configuring ufw advanced rules in ${UFW_BEFORE_RULES}..."
+    msg_info "Configuring UFW advanced rules in ${UFW_BEFORE_RULES}..."
 
     if [[ ! -f "$UFW_BEFORE_RULES" ]]; then
         msg_error "File ${UFW_BEFORE_RULES} not found."
@@ -44,6 +46,22 @@ apply_before_ufw_rules() {
     msg_info "Successfully injected INVALID packet drop and ICMP rate-limiting rules."
 }
 
+apply_vbox_network_hardening() {
+    msg_info "VirtualBox environment detected. Injecting network isolation rules into UFW..."
+
+    # 1. Allow outbound traffic to the VirtualBox NAT Gateway (10.0.2.2)
+    # MUST come FIRST so UFW evaluates this rule before blocking the 10.0.0.0/8 subnet
+    ufw allow out to 10.0.2.2 comment 'VBox Hardening: Allow NAT Gateway'
+
+    # 2. Deny outbound traffic to private local network ranges (RFC 1918)
+    # Prevents the VM from scanning or accessing the host's local LAN
+    ufw deny out to 10.0.0.0/8 comment 'VBox Hardening: Block 10.0.0.0/8 LAN'
+    ufw deny out to 172.16.0.0/12 comment 'VBox Hardening: Block 172.16.0.0/12 LAN'
+    ufw deny out to 192.168.0.0/16 comment 'VBox Hardening: Block 192.168.0.0/16 LAN'
+
+    msg_success "VirtualBox UFW network isolation rules applied."
+}
+
 apply_ufw_rules() {
     if ! command -v ufw &>/dev/null; then
         msg_error "UFW is not installed. Please install it first."
@@ -72,16 +90,6 @@ apply_ufw_rules() {
     ufw deny in from 127.0.0.0/8 comment 'Prevent loopback IP spoofing'
     ufw deny in from ::1 comment 'Prevent IPv6 loopback IP spoofing'
 
-    local before_rules="/etc/ufw/before.rules"
-
-    if [[ -f "$before_rules" ]]; then
-        if ! grep -q "Drop INVALID packets" "$before_rules"; then
-            msg_info "Injecting CTSTATE INVALID drop rules into before.rules..."
-            sed -i '/# End required lines/a \
-    \n# Drop INVALID packets (Hardening)\n-A ufw-before-input -m conntrack --ctstate INVALID -j DROP\n' "$before_rules"
-        fi
-    fi
-
     # SSH Rate Limiting
     msg_info "Configuring SSH anti brute-force protection on port ${SSH_PORT}..."
     ufw limit "${SSH_PORT}/tcp" comment 'SSH anti brute-force protection'
@@ -92,13 +100,23 @@ apply_ufw_rules() {
         ufw allow "${service}" comment 'Public web service'
     done
 
-    # Block common noisy/vulnerable local protocols
-    ufw deny 5353/udp comment 'Block mDNS'
-    ufw deny 137,138/udp comment 'Block NetBIOS'
-    ufw deny 139,445/tcp comment 'Block SMB share'
+    # Hypervisor detection and rule injection
+    local hypervisor
+    hypervisor=$(detect_hypervisor || true)
 
-    # Specific internal rules
-    ufw allow from 192.168.1.0/24 to any port 631 proto tcp comment 'CUPS local printer'
+    if [[ "$hypervisor" == "virtualbox" ]]; then
+        apply_vbox_network_hardening
+    else
+        msg_skip "Hypervisor is '$hypervisor'. Skipping VirtualBox-specific UFW rules."
+        
+        # Block noisy/vulnerable local protocols on non-VirtualBox environments
+        ufw deny 5353/udp comment 'Block mDNS'
+        ufw deny 137,138/udp comment 'Block NetBIOS'
+        ufw deny 139,445/tcp comment 'Block SMB share'
+
+        # Specific internal rules for physical local network
+        ufw allow from 192.168.1.0/24 to any port 631 proto tcp comment 'CUPS local printer'
+    fi
 
     # Enable and log
     ufw logging low

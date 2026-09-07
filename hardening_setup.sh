@@ -331,6 +331,7 @@ apply_kernel_network_hardening() {
         msg_warn "Sysctl reloaded with non-fatal warnings."
     fi
 }
+
 configure_firewall() {
     local package_manager="$1"
     local fw_engine=""
@@ -928,11 +929,10 @@ setup_usbguard() {
 
     msg_success "USBGuard configured and active."
 }
-
 install_antivirus() {
     local package_manager="$1"
 
-    if [[ -f "${ANTIVIRUS_SETUP:-}" ]]; then
+    if [[ -n "${ANTIVIRUS_SETUP:-}" && -f "$ANTIVIRUS_SETUP" ]]; then
         msg_info "Loading antivirus module..."
         if source "$ANTIVIRUS_SETUP"; then
             setup_threat_protection "$package_manager"
@@ -988,7 +988,7 @@ run_all_tasks() {
     setup_apparmor "$package_manager" || msg_warn "AppArmor setup completed with warnings."
     print_separator
 
-    install_antivirus "$package_manager" || msg_warn "Antivirus installation encountered issues."   
+    install_antivirus "$package_manager" || msg_warn "Antivirus installation encountered issues."    
     print_separator
 
     setup_usbguard "$package_manager" || msg_warn "USBGuard setup encountered issues."
@@ -996,17 +996,46 @@ run_all_tasks() {
 
     msg_success "Full hardening pipeline completed successfully."
 }
-
 show_interactive_menu() {
     local package_manager="$1"
     local os_distribution="$2"
 
     if [[ ! -t 0 ]]; then
-        msg_error "Interactive menu requires a TTY terminal. Use 'run_all_tasks' for unattended mode."
+        msg_error "Interactive menu requires a TTY terminal. Use '--all' for unattended mode."
         exit 1
     fi
 
-    trap 'echo -e "\n"; msg_info "Script execution cancelled by user."; exit 130' INT
+    execute_option() {
+        local opt="$1"
+        local opt_lower="${opt,,}" # Convierte la entrada a minúsculas
+
+        case "$opt_lower" in
+            1)  run_all_tasks "$package_manager" "$os_distribution" ;;
+            2)  update_system "$package_manager" ;;
+            3)  install_essentials "$package_manager" ;;
+            4)  setup_chrony "$package_manager" ;;
+            5)  setup_unattended_upgrades "$os_distribution" ;;
+            6)  setup_fail2ban "$package_manager" ;;
+            7)  configure_firewall "$package_manager" ;;
+            8)  setup_quad9_dns ;;
+            9)  apply_hardware_hardening "$package_manager" ;;
+            10) setup_secure_mounts ;;
+            11) setup_umask ;;
+            12) setup_usbguard "$package_manager" ;;
+            13) setup_ssh_hardening "$package_manager" ;;
+            14) disable_unused_services ;;
+            15) setup_apparmor "$package_manager" ;;
+            16) install_antivirus "$package_manager" ;;
+            17) restore_backup ;;
+            18|exit|out|stop|close|q|quit)
+                msg_info "Exiting setup suite."
+                exit 0
+                ;;
+            *)
+                msg_warn "Invalid option '$opt'. Skipping."
+                ;;
+        esac
+    }
 
     while true; do
         clear
@@ -1019,7 +1048,7 @@ show_interactive_menu() {
         echo -e " 4) ${cyanColour}Time Sync & TZ${endColour}       -> Chrony NTP daemon setup & interactive timezone selection"
         echo -e " 5) ${cyanColour}Auto-Upgrades${endColour}        -> Unattended security updates (Debian/Ubuntu only)"
         echo -e " 6) ${cyanColour}Fail2ban Service${endColour}     -> Bruteforce protection & custom SSH jail policies"
-        echo -e " 7) ${cyanColour}Firewall${endColour}     -> Firewall rules application & Network kernel hardening"
+        echo -e " 7) ${cyanColour}Firewall${endColour}             -> Firewall rules application & Network kernel hardening"
         echo -e " 8) ${cyanColour}Quad9 DNS Setup${endColour}      -> Malware blocking, DNSSEC & DNS-over-TLS configuration"
         echo -e " 9) ${cyanColour}Hardware & Memory${endColour}    -> Limits, coredumps, dmesg restriction, swappiness & /dev/shm"
         echo -e "10) ${cyanColour}Secure Mounts${endColour}        -> Apply nodev,nosuid,noexec flags to /dev/shm & fstab"
@@ -1028,103 +1057,38 @@ show_interactive_menu() {
         echo -e "13) ${cyanColour}SSH Hardening${endColour}        -> Disable root login, password auth & enforce key-based access"
         echo -e "14) ${cyanColour}Unused Services${endColour}      -> Disable Bluetooth, CUPS, Avahi-daemon & ModemManager"
         echo -e "15) ${cyanColour}AppArmor MAC${endColour}         -> Mandatory Access Control setup, caching & profile enforcement"        
-        echo -e "16) ${cyanColour}Threat Surface Protection${endColour} -> Prepare ClamAV, Lynis auditor, chkrootkit & ClamUI"        
-       
-       if [[ -f "$BACKUP_ARCHIVE" ]]; then
+        echo -e "16) ${cyanColour}Threat Protection${endColour}    -> Prepare ClamAV, Lynis auditor, chkrootkit & ClamUI"        
+        
+        if [[ -n "${BACKUP_ARCHIVE:-}" && -f "$BACKUP_ARCHIVE" ]]; then
             echo -e "17) ${purpleColour}Restore Backup${endColour}       -> ${greenColour}[Backup Available]${endColour} Revert system to initial state"
         else
             echo -e "17) ${purpleColour}Restore Backup${endColour}       -> ${grayColour}[No Backup Found]${endColour} Revert system to initial state"
         fi
 
-        echo -e "18) ${redColour}Exit${endColour}                 -> Terminate execution"
+        echo -e "18) ${redColour}Exit / Quit${endColour}          -> Terminate execution (exit, stop, close, q)"
         print_separator
 
-        read -rp "Select an option [1-18]: " choice
-
+        read -rp "Select option(s) [e.g. 5,7,9 or exit]: " user_input
         print_separator
-        case "$choice" in
-            1)
-                run_all_tasks "$package_manager" "$os_distribution"
-                read -rp "Press [ENTER] to return to menu..."
-                ;;
-            2)
-                update_system "$package_manager"
-                read -rp "Press [ENTER] to return to menu..."
-                ;;
-            3)
-                install_essentials "$package_manager"
-                read -rp "Press [ENTER] to return to menu..."
-                ;;
-            4)
-                setup_chrony "$package_manager"
-                read -rp "Press [ENTER] to return to menu..."
-                ;;
-            5)
-                setup_unattended_upgrades "$os_distribution"
-                read -rp "Press [ENTER] to return to menu..."
-                ;;
-            6)
-                setup_fail2ban "$package_manager"
-                read -rp "Press [ENTER] to return to menu..."
-                ;;
-            7)
-                configure_firewall "$package_manager"
-                read -rp "Press [ENTER] to return to menu..."
-                ;;
-            8)
-                setup_quad9_dns
-                read -rp "Press [ENTER] to return to menu..."
-                ;;
-            9)
-                apply_hardware_hardening "$package_manager"
-                read -rp "Press [ENTER] to return to menu..."
-                ;;
-            10)
-                setup_secure_mounts
-                read -rp "Press [ENTER] to return to menu..."
-                ;;
-            11)
-                setup_umask
-                read -rp "Press [ENTER] to return to menu..."
-                ;;
-            12)
-                setup_usbguard "$package_manager"
-                read -rp "Press [ENTER] to return to menu..."
-                ;;
-            13)
-                setup_ssh_hardening "$package_manager"
-                read -rp "Press [ENTER] to return to menu..."
-                ;;
-            14)
-                disable_unused_services
-                read -rp "Press [ENTER] to return to menu..."
-                ;;
-            15)
-                setup_apparmor "$package_manager"
-                read -rp "Press [ENTER] to return to menu..."
-                ;;
-            16)
-                install_antivirus "$package_manager"
-                read -rp "Press [ENTER] to return to menu..."
-                ;;
-            17)
-                restore_backup
-                read -rp "Press [ENTER] to return to menu..."
-                ;;
-            18)
-                msg_info "Exiting setup suite."
-                exit 0
-                ;;
-            *)
-                msg_warn "Invalid option '$choice'. Please try again."
-                sleep 1.5
-                ;;
-        esac
+
+        clean_input=$(echo "$user_input" | tr ',' ' ')
+
+        if [[ -z "$clean_input" ]]; then
+            continue
+        fi
+
+        for choice in $clean_input; do
+            execute_option "$choice"
+            print_separator
+        done
+
+        read -rp "Press [ENTER] to return to menu..."
     done
 }
 
-
 main() {
+    trap 'echo -e "\n"; msg_info "Script execution cancelled by user."; exit 130' INT
+
     if [[ $(uname -s) != "Linux" ]]; then
         msg_error "This script is only compatible with Linux distributions."
         exit 1
@@ -1143,8 +1107,13 @@ main() {
 
     ensure_sudo_installed
     create_initial_backup
-    show_interactive_menu "$package_manager" "$os_distribution"
 
+    # Parse arguments for unattended execution
+    if [[ "${1:-}" == "--all" || "${1:-}" == "-a" ]]; then
+        run_all_tasks "$package_manager" "$os_distribution"
+    else
+        show_interactive_menu "$package_manager" "$os_distribution"
+    fi
 }
 
 main "$@"
