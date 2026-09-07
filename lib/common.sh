@@ -35,6 +35,11 @@ msg_debug()    { echo -e "${grayColour}[DEBUG]${endColour} $*" >&2; }
 
 print_separator() { echo -e "${grayColour}--------------------------------------------------${endColour}"; }
 
+# Example: if command_exists "docker"; then docker compose up -d; fi
+command_exists() {
+    command -v "$1" >/dev/null 2>&1
+}
+
 # Example: die "Critical config missing in /etc/app.conf"
 die() {
     msg_error "$*"
@@ -42,14 +47,20 @@ die() {
 }
 
 detect_package_manager() {
-    if command -v apt &>/dev/null; then
+    if command_exists apt; then
         echo "apt"
-    elif command -v pacman &>/dev/null; then
+    elif command_exists pacman; then
         echo "pacman"
-    elif command -v dnf &>/dev/null; then
+    elif command_exists dnf; then
         echo "dnf"
-    elif command -v brew &>/dev/null; then
+    elif command_exists zypper; then
+        echo "zypper"
+    elif command_exists apk; then
+        echo "apk"
+    elif command_exists brew; then
         echo "brew"
+    elif command_exists yum; then
+        echo "yum"
     else
         msg_error "No compatible package manager detected, aborting..."
         return 1
@@ -57,45 +68,84 @@ detect_package_manager() {
 }
 
 detect_distribution() {
-    if [[ "$(uname -s)" == "Darwin" ]]; then
-        echo "macos"
-        return 0
+    local os_id=""
+    local os_like=""
+
+    if [ -f /etc/os-release ]; then
+        os_id=$(grep -E '^ID=' /etc/os-release | cut -d= -f2 | tr -d '"' | tr '[:upper:]' '[:lower:]')
+        os_like=$(grep -E '^ID_LIKE=' /etc/os-release | cut -d= -f2 | tr -d '"' | tr '[:upper:]' '[:lower:]')
+    elif command_exists lsb_release; then
+        os_id=$(lsb_release -si | tr '[:upper:]' '[:lower:]')
+    elif [ -f /etc/debian_version ]; then
+        os_id="debian"
+    elif [ -f /etc/arch-release ]; then
+        os_id="arch"
+    elif [ -f /etc/redhat-release ]; then
+        os_id="fedora"
+    elif [ -f /etc/SuSE-release ]; then
+        os_id="opensuse"
     fi
-    
-    if [[ ! -f /etc/os-release ]]; then
-        msg_error "Distribution could not be identified (/etc/os-release does not exist)."
-        exit 1
-    fi
 
-    source /etc/os-release
-
-    local os_id="${ID:-}"
-    local os_like="${ID_LIKE:-}"
-    local target_module=""
-
-    case "${os_id}" in
-        debian|ubuntu|pop|mint|kali|raspbian) target_module="debian" ;;
-        arch|manjaro|endeavouros|garuda)       target_module="arch" ;;
-        fedora|rhel|centos)                    target_module="fedora" ;;
+    case "$os_id" in
+        debian|ubuntu|mint|pop|kali|elementary|raspbian|neon)
+            echo "debian"
+            return 0
+            ;;
+        arch|manjaro|endeavouros|garuda|artix|cachyos)
+            echo "arch"
+            return 0
+            ;;
+        fedora|rhel|rocky|almalinux|centos|nobara|ol)
+            echo "fedora"
+            return 0
+            ;;
+        opensuse*|suse|sles)
+            echo "opensuse"
+            return 0
+            ;;
+        alpine)
+            echo "alpine"
+            return 0
+            ;;
     esac
 
-    if [[ -z "${target_module}" && -n "${os_like}" ]]; then
-        for family in ${os_like}; do
-            case "${family}" in
-                debian|ubuntu) target_module="debian"; break ;;
-                arch)          target_module="arch"; break ;;
-                fedora|rhel)   target_module="fedora"; break ;;
-            esac
-        done
-    fi
+    for like in $os_like; do
+        case "$like" in
+            *debian*|*ubuntu*)
+                echo "debian"
+                return 0
+                ;;
+            *arch*)
+                echo "arch"
+                return 0
+                ;;
+            *fedora*|*rhel*|*centos*)
+                echo "fedora"
+                return 0
+                ;;
+            *suse*)
+                echo "opensuse"
+                return 0
+                ;;
+        esac
+    done
 
-    if [[ -z "${target_module}" ]]; then
-        msg_error "Unsupported distribution: ID='${os_id}'"
-        exit 1
+    if command_exists apt-get; then
+        echo "debian"
+    elif command_exists pacman; then
+        echo "arch"
+    elif command_exists dnf || command_exists yum; then
+        echo "fedora"
+    elif command_exists zypper; then
+        echo "opensuse"
+    elif command_exists apk; then
+        echo "alpine"
+    else
+        echo "unknown"
+        return 1
     fi
-
-    echo $target_module
 }
+
 
 detect_hypervisor() {
     local raw_virt=""
@@ -212,10 +262,6 @@ check_root() {
     fi
 }
 
-# Example: if command_exists "docker"; then docker compose up -d; fi
-command_exists() {
-    command -v "$1" >/dev/null 2>&1
-}
 
 # Example: require_commands "git" "curl" "jq"
 require_commands() {
