@@ -1,138 +1,67 @@
-# ~/.bash.aliases - Modernized & Hardened
+# ~/.bash.aliases - predictable shortcuts; destructive operations stay explicit.
 
-# Quick tar compress/decompress with progress
-alias qcompress='tar -cvzf'
-alias qdecompress='tar -xvzf'
-
-# --- Shell & Navigation ---
 alias refresh='source ~/.bashrc'
-alias path='echo "$PATH" | tr ":" "\n"'
-alias da='date "+%Y-%m-%d %A %T %Z"'
-alias +x='chmod +x'
+alias cls='clear'
+alias path='printf "%s\n" "$PATH" | tr ":" "\n"'
+alias now='date "+%Y-%m-%d %A %T %Z"'
+alias chmodx='chmod +x'
 
-# Allow sudo to expand aliases (e.g., 'sudo ll')
-alias sudo='sudo '
-
-# File listing (Uses eza/lsd if available; fallback to enhanced ls)
+# Listings. Do not require icon fonts for the baseline experience.
 if command -v eza >/dev/null 2>&1; then
-    alias ls='eza --icons=auto'
+    alias ls='eza --group-directories-first'
     alias ll='eza -lhF --git --group-directories-first'
     alias la='eza -lahF --git --group-directories-first'
-    alias l='eza -CF'
-    alias lt='eza -lhF -s=size --group-directories-first'
-    alias tree='eza --tree --icons=auto'
+    alias lt='eza -lhF --sort=size --group-directories-first'
+    alias tree='eza --tree --group-directories-first'
 elif command -v lsd >/dev/null 2>&1; then
-    alias ls='lsd'
-    alias ll='lsd -l'
-    alias la='lsd -a'
-    alias l='lsd -CF'
-    alias lt='lsd -l --total-size'
+    alias ls='lsd --group-dirs first'
+    alias ll='lsd -lh --group-dirs first'
+    alias la='lsd -lah --group-dirs first'
+    alias lt='lsd -lhS --group-dirs first'
     alias tree='lsd --tree'
 else
     alias ls='ls --color=auto'
-    alias ll='ls -lahF --group-directories-first'
-    alias la='ls -A'
-    alias l='ls -CF'
-    alias lt='ls -lhS --group-directories-first'
-    alias tree='tree -CAhF --dirsfirst'
-    alias treed='tree -CAFd'
+    alias ll='ls -lhF --group-directories-first 2>/dev/null || ls -lhF'
+    alias la='ls -lahF --group-directories-first 2>/dev/null || ls -lahF'
+    alias lt='ls -lhSF --group-directories-first 2>/dev/null || ls -lhSF'
 fi
 
-# Verbose directory and temp creation
-alias mkdir='mkdir -pv'
-alias mktemp='mktemp -dv'
+# Git: short, conventional and argument-safe because these aliases do not need shell parsing.
+alias g='git'
+alias gs='git status --short --branch'
+alias gd='git diff'
+alias gds='git diff --staged'
+alias gl='git log --oneline --decorate --graph -20'
+alias ga='git add'
+alias gc='git commit'
+alias gp='git push'
+alias gf='git fetch --all --prune --tags'
 
-# --- External Tools (Bat / FZF / Kitty) ---
-# Transparent compatibility for bat / batcat
-if command -v batcat >/dev/null 2>&1; then
-    alias bat='batcat'
-    _BAT_CMD="batcat"
-elif command -v bat >/dev/null 2>&1; then
-    _BAT_CMD="bat"
-fi
-
-if [ -n "${_BAT_CMD:-}" ]; then
-    alias fzf="fzf --preview '$_BAT_CMD --style=numbers --color=always --line-range :500 {}'"
-fi
-
-alias icat='kitty +kitten icat'
-
-# --- Networking & Ports (Modern netstat replacement) ---
-alias openports='ss -tulpn'
-alias lsockets='sudo ss -tulpn | grep LISTEN'
-alias listen='ss -tulnp'
-alias netcon="ss -ntu | awk '{print \$5}' | cut -d: -f1 | sort | uniq -c | sort -nr"
-alias curltime='curl -o /dev/null -s -w "Connect: %{time_connect}s\nTTFB: %{time_starttransfer}s\nTotal: %{time_total}s\nStatus: %{http_code}\n"'
-
-# User-Agent Helpers
-alias nmaph='nmap --script-args http.useragent="$CHROME_DESKTOP_AGENT"'
-alias wpscanh='wpscan --ua "$FIREFOX_DESKTOP_AGENT"'
-alias curlh='curl -A "$EDGE_DESKTOP_AGENT"'
-alias wgeth='wget -U "$ANDROID_MOBILE_AGENT"'
-
-# --- Hardware, Disk & Processes ---
-alias topcpu="ps aux --sort=-%cpu | head -n 11"
-alias topmem="ps aux --sort=-%mem | head -n 11"
-alias devices="lsblk -f"
-alias devicess="lshw -short"
-alias cpuinfo="less /proc/cpuinfo"
+# System / logs.
+alias ports='ss -lntup'
+alias sockets='ss -tunap'
+alias routes='ip route show'
+alias failed='systemctl --failed --no-pager'
+alias ufailed='systemctl --user --failed --no-pager'
+alias jerr='journalctl -p warning..alert -b --no-pager'
+alias jfollow='journalctl -f'
 alias meminfo='free -h'
+alias devices='lsblk -o NAME,SIZE,FSTYPE,FSVER,LABEL,UUID,MOUNTPOINTS,MODEL'
+alias topcpu='ps aux --sort=-%cpu'
+alias topmem='ps aux --sort=-%mem'
 
-# df/du replacement if duf is available
 if command -v duf >/dev/null 2>&1; then
-    alias mountedinfo='duf'
+    alias disk='duf'
 else
-    alias mountedinfo='df -hT'
+    alias disk='df -hT'
 fi
 
-alias mnt='findmnt -t ext4,btrfs,xfs,zfs,ntfs,vfat'
-alias folders='du -h --max-depth=1 | sort -hr'
-alias folderssort='du -sh ./* 2>/dev/null | sort -hr'
-alias usage='du -ch | grep total'
-alias totalusage='df -hl --total | grep total'
-
-# --- File Operations & Cleanup ---
-alias count='find . -type f | wc -l'
-
-# cpv /ruta/archivo_grande.iso /media/usb/
-# cpv -r carpeta_origen/ /media/backup/
+# Copy helpers. The mirror variants deliberately do NOT imply --delete.
 alias cpv='rsync -ah --info=progress2'
-alias rsync-copy='rsync -aHAXvh --info=progress2'
-alias rsync-move='rsync -aHAXvh --remove-source-files --info=progress2'
-alias rsync-update='rsync -uavh --info=progress2'
-alias rsync-mirror='rsync -aHAXvh --delete --info=progress2'
+alias rsync-copy='rsync -aHAXh --info=progress2'
+alias rsync-update='rsync -aHAXuh --info=progress2'
 
-# Backup web root or database dumps fast
-alias mirror-site='rsync -aHAXZvh --exclude=".git" --delete --info=progress2'
-
-alias shredd='shred -uzv -n 10'
-alias dropcache='sudo sync; echo 3 | sudo tee /proc/sys/vm/drop_caches'
-
-# Package manager updates mapped by system type
-if command -v apt >/dev/null 2>&1; then
-    alias update='sudo apt update && sudo apt upgrade'
-    alias cleanapt='sudo apt clean && sudo apt autoremove --purge -y'
-elif command -v pacman >/dev/null 2>&1; then
-    alias update='sudo pacman -Syu'
-    alias cleanpacman='sudo pacman -Scc'
+# bat/batcat compatibility without creating a system-wide shim.
+if command -v batcat >/dev/null 2>&1 && ! command -v bat >/dev/null 2>&1; then
+    alias bat='batcat'
 fi
-
-alias cachefonts='fc-cache -f -v'
-alias logs="journalctl -xf"
-alias journalerr='journalctl -p 3 -xb'
-
-# --- Systemd ---
-alias failed='systemctl --failed'
-alias ufailed='systemctl --user --failed'
-alias failedlogins='sudo journalctl -u sshd -u systemd-logind | grep -i "failed"'
-
-# --- Long-running command alerts ---
-# sudo apt update && sudo apt upgrade -y; alert
-# sleep 30; alert
-alias alert='notify-send --urgency=low -i "$([ $? = 0 ] && echo terminal || echo error)" "$(history|tail -n1|sed -e '\''s/^\s*[0-9]\+\s*//;s/[;&|]\s*alert$//'\'')"'
-
-# --- ARCH LINUX SPECIFICS ---
-alias pacorphans='sudo pacman -Rns $(pacman -Qtdq)'
-alias unlockpacman='sudo rm /var/lib/pacman/db.lck'
-# Find .pacnew or .pacsave files after updates
-alias pacdiff-check='pacman -Qii | awk '\''/^(Name|Backup)/{if ($1=="Name") name=$3; else if ($2 ~ /\[modified\]/) print name, $2}'\'''

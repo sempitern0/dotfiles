@@ -1,414 +1,375 @@
-# shellcheck disable=SC2034,SC2329
+# shellcheck shell=bash
+# Shared runtime for the dotfiles assistants.
+# This file is sourced; it intentionally does not change the caller's shell options.
 
-# ==========================================
-# Color variables on ANSI
-# ==========================================
-redColour=$'\033[0;31m'
-greenColour=$'\033[0;32m'
-yellowColour=$'\033[0;33m'
-blueColour=$'\033[0;34m'
-purpleColour=$'\033[0;35m'
-cyanColour=$'\033[0;36m'
-grayColour=$'\033[0;90m'
+[[ -n "${DOTFILES_COMMON_LOADED:-}" ]] && return 0
+DOTFILES_COMMON_LOADED=1
 
-boldRed=$'\033[1;31m'
-boldGreen=$'\033[1;32m'
-boldYellow=$'\033[1;33m'
-boldBlue=$'\033[1;34m'
-boldPurple=$'\033[1;35m'
-boldCyan=$'\033[1;36m'
-boldWhite=$'\033[1;37m'
+DOTFILES_STATE_HOME="${XDG_STATE_HOME:-${HOME:-/tmp}/.local/state}/dotfiles"
+DOTFILES_BACKUP_HOME="${DOTFILES_STATE_HOME}/backups"
+DOTFILES_RUN_ID="${DOTFILES_RUN_ID:-$(date +%Y%m%d-%H%M%S)-$$}"
+DOTFILES_NO_COLOR="${DOTFILES_NO_COLOR:-0}"
+DOTFILES_PKG_REFRESHED=0
+DOTFILES_RESULT_FILE="${DOTFILES_RESULT_FILE:-}"
 
-endColour=$'\033[0m'
+TASK_PASS=0
+TASK_WARN=0
+TASK_FAIL=0
+TASK_SKIP=0
+TASK_RESULTS=()
 
-msg_info()     { echo -e "${cyanColour}[INFO]${endColour} $*" >&2; }
-msg_success()  { echo -e "${greenColour}[OK]${endColour} $*" >&2; }
-msg_warn()     { echo -e "${yellowColour}[WARN]${endColour} $*" >&2; }
-msg_error()    { echo -e "${redColour}[ERROR]${endColour} $*" >&2; }
+command_exists() { command -v "$1" >/dev/null 2>&1; }
 
-msg_search()   { echo -e "${purpleColour}[SEARCH]${endColour} $*" >&2; }
-msg_exec()     { echo -e "${blueColour}[EXEC]${endColour} $*" >&2; }
-msg_download() { echo -e "${boldBlue}[FETCH]${endColour} $*" >&2; }
-msg_build()    { echo -e "${boldCyan}[BUILD]${endColour} $*" >&2; }
-msg_skip()     { echo -e "${grayColour}[SKIP]${endColour} $*" >&2; }
-msg_debug()    { echo -e "${grayColour}[DEBUG]${endColour} $*" >&2; }
-
-print_separator() { echo -e "${grayColour}--------------------------------------------------${endColour}"; }
-
-# Example: if command_exists "docker"; then docker compose up -d; fi
-command_exists() {
-    command -v "$1" >/dev/null 2>&1
+ui_has_tty() {
+    [[ ( -t 0 || -t 1 || -t 2 ) && -r /dev/tty && -w /dev/tty ]]
 }
 
-# Example: die "Critical config missing in /etc/app.conf"
-die() {
-    msg_error "$*"
-    exit 1
-}
-
-detect_package_manager() {
-    if command_exists apt; then
-        echo "apt"
-    elif command_exists pacman; then
-        echo "pacman"
-    elif command_exists dnf; then
-        echo "dnf"
-    elif command_exists zypper; then
-        echo "zypper"
-    elif command_exists apk; then
-        echo "apk"
-    elif command_exists brew; then
-        echo "brew"
-    elif command_exists yum; then
-        echo "yum"
+ui_color_init() {
+    if [[ "$DOTFILES_NO_COLOR" == "1" || -n "${NO_COLOR:-}" || ! -t 1 ]]; then
+        C_RESET="" C_BOLD="" C_DIM="" C_RED="" C_GREEN="" C_YELLOW="" C_BLUE="" C_MAGENTA="" C_CYAN="" C_WHITE=""
     else
-        msg_error "No compatible package manager detected, aborting..."
-        return 1
+        C_RESET=$'\033[0m'
+        C_BOLD=$'\033[1m'
+        C_DIM=$'\033[2m'
+        C_RED=$'\033[31m'
+        C_GREEN=$'\033[32m'
+        C_YELLOW=$'\033[33m'
+        C_BLUE=$'\033[34m'
+        C_MAGENTA=$'\033[35m'
+        C_CYAN=$'\033[36m'
+        C_WHITE=$'\033[97m'
     fi
+}
+ui_color_init
+
+UI_RULE="----------------------------------------------------------------------------------------"
+
+msg_info()    { printf '%b[INFO]%b %s\n' "$C_CYAN" "$C_RESET" "$*" >&2; }
+msg_success() { printf '%b[ OK ]%b %s\n' "$C_GREEN" "$C_RESET" "$*" >&2; }
+msg_warn()    { printf '%b[WARN]%b %s\n' "$C_YELLOW" "$C_RESET" "$*" >&2; }
+msg_error()   { printf '%b[FAIL]%b %s\n' "$C_RED" "$C_RESET" "$*" >&2; }
+msg_skip()    { printf '%b[SKIP]%b %s\n' "$C_DIM" "$C_RESET" "$*" >&2; }
+msg_exec()    { printf '%b[EXEC]%b %s\n' "$C_MAGENTA" "$C_RESET" "$*" >&2; }
+
+ui_rule() { printf '%b%s%b\n' "$C_DIM" "$UI_RULE" "$C_RESET"; }
+
+ui_clear() {
+    [[ -t 1 ]] && command_exists clear && clear 2>/dev/null || true
+}
+
+ui_header() {
+    local title="$1" subtitle="${2:-}"
+    ui_clear
+    printf '%b%b DOTFILES WORKSTATION CONTROL PLANE%b\n' "$C_BOLD" "$C_CYAN" "$C_RESET"
+    ui_rule
+    printf '  %-18s %s\n' "Host" "$(hostname 2>/dev/null || printf unknown)"
+    printf '  %-18s %s\n' "OS family" "${OS_FAMILY:-unknown}"
+    printf '  %-18s %s\n' "Target user" "${TARGET_USER:-unknown}"
+    printf '  %-18s %s\n' "Target home" "${TARGET_HOME:-unknown}"
+    ui_rule
+    printf '%b%s%b\n' "$C_BOLD" "$title" "$C_RESET"
+    [[ -n "$subtitle" ]] && printf '%b%s%b\n' "$C_DIM" "$subtitle" "$C_RESET"
+    printf '\n'
+}
+
+ui_menu_item() {
+    local key="$1" title="$2" desc="${3:-}" colour="${4:-$C_CYAN}"
+    printf '  %b[%2s]%b  %b%-28s%b %b%s%b\n' "$C_DIM" "$key" "$C_RESET" "$colour" "$title" "$C_RESET" "$C_DIM" "$desc" "$C_RESET"
+}
+
+ui_pause() {
+    ui_has_tty || return 0
+    printf '\n' >/dev/tty
+    read -r -p "Press [ENTER] to continue..." _ </dev/tty || true
+}
+
+ask() {
+    local prompt="$1" default="${2:-}" answer=""
+    ui_has_tty || return 1
+    if [[ -n "$default" ]]; then
+        printf '%b>%b %s %b[%s]%b: ' "$C_CYAN" "$C_RESET" "$prompt" "$C_DIM" "$default" "$C_RESET" >/dev/tty
+    else
+        printf '%b>%b %s: ' "$C_CYAN" "$C_RESET" "$prompt" >/dev/tty
+    fi
+    IFS= read -r answer </dev/tty || return 1
+    printf '%s' "${answer:-$default}"
+}
+
+confirm() {
+    local prompt="$1" default="${2:-N}" answer=""
+    ui_has_tty || return 1
+    while true; do
+        if [[ "${default^^}" == "Y" ]]; then
+            printf '%b?%b %s %b[Y/n]%b: ' "$C_CYAN" "$C_RESET" "$prompt" "$C_DIM" "$C_RESET" >/dev/tty
+        else
+            printf '%b?%b %s %b[y/N]%b: ' "$C_CYAN" "$C_RESET" "$prompt" "$C_DIM" "$C_RESET" >/dev/tty
+        fi
+        IFS= read -r answer </dev/tty || return 1
+        answer="${answer:-$default}"
+        case "${answer^^}" in
+            Y|YES|S|SI|SÍ) return 0 ;;
+            N|NO) return 1 ;;
+            *) msg_warn "Please answer yes or no." ;;
+        esac
+    done
+}
+
+confirm_literal() {
+    local prompt="$1" literal="$2" answer=""
+    ui_has_tty || return 1
+    printf '%b%s%b\n' "$C_YELLOW" "$prompt" "$C_RESET" >/dev/tty
+    printf 'Type %b%s%b to continue: ' "$C_RED" "$literal" "$C_RESET" >/dev/tty
+    IFS= read -r answer </dev/tty || return 1
+    [[ "$answer" == "$literal" ]]
+}
+
+record_result() {
+    local status="$1" label="$2" detail="${3:-}"
+    TASK_RESULTS+=("${status}|${label}|${detail}")
+    if [[ -n "${DOTFILES_RESULT_FILE:-}" ]]; then
+        mkdir -p "$(dirname "$DOTFILES_RESULT_FILE")" 2>/dev/null || true
+        printf '%s\t%s\t%s\t%s\n' "$(date -Is)" "$status" "$label" "$detail" >>"$DOTFILES_RESULT_FILE" 2>/dev/null || true
+    fi
+    case "$status" in
+        PASS) ((TASK_PASS+=1)) ;;
+        WARN) ((TASK_WARN+=1)) ;;
+        FAIL) ((TASK_FAIL+=1)) ;;
+        SKIP) ((TASK_SKIP+=1)) ;;
+    esac
+}
+
+run_task() {
+    local label="$1"; shift
+    printf '\n%b==>%b %s\n' "$C_CYAN" "$C_RESET" "$label"
+    local rc=0
+    if "$@"; then
+        record_result PASS "$label"
+        msg_success "$label"
+    else
+        rc=$?
+        record_result WARN "$label" "rc=$rc"
+        msg_warn "$label finished with rc=$rc; the assistant will continue."
+    fi
+    return 0
+}
+
+show_run_summary() {
+    printf '\n'
+    ui_rule
+    printf '%bRun summary%b\n' "$C_BOLD" "$C_RESET"
+    printf '  PASS=%d  WARN=%d  FAIL=%d  SKIP=%d\n' "$TASK_PASS" "$TASK_WARN" "$TASK_FAIL" "$TASK_SKIP"
+    local row status label detail
+    for row in "${TASK_RESULTS[@]}"; do
+        IFS='|' read -r status label detail <<<"$row"
+        [[ "$status" == "WARN" || "$status" == "FAIL" ]] || continue
+        printf '  %-5s %-34s %s\n' "$status" "$label" "$detail"
+    done
+    [[ -n "${DOTFILES_RESULT_FILE:-}" ]] && printf '  Evidence: %s\n' "$DOTFILES_RESULT_FILE"
+    ui_rule
+}
+
+is_wsl() {
+    [[ -n "${WSL_DISTRO_NAME:-}" ]] || grep -qiE 'microsoft|wsl' /proc/sys/kernel/osrelease /proc/version 2>/dev/null
+}
+
+is_container() {
+    command_exists systemd-detect-virt && systemd-detect-virt --container >/dev/null 2>&1
+}
+
+is_desktop_environment() {
+    [[ -n "${XDG_CURRENT_DESKTOP:-}${DESKTOP_SESSION:-}${WAYLAND_DISPLAY:-}${DISPLAY:-}" ]] && return 0
+    is_container && return 1
+    command_exists systemctl || return 1
+    [[ "$(systemctl get-default 2>/dev/null || true)" == "graphical.target" ]]
 }
 
 detect_distribution() {
-    local os_id=""
-    local os_like=""
+    OS_ID="unknown"
+    OS_ID_LIKE=""
+    OS_PRETTY="Linux"
+    OS_FAMILY="unknown"
 
-    if [ -f /etc/os-release ]; then
-        os_id=$(grep -E '^ID=' /etc/os-release | cut -d= -f2 | tr -d '"' | tr '[:upper:]' '[:lower:]')
-        os_like=$(grep -E '^ID_LIKE=' /etc/os-release | cut -d= -f2 | tr -d '"' | tr '[:upper:]' '[:lower:]')
-    elif command_exists lsb_release; then
-        os_id=$(lsb_release -si | tr '[:upper:]' '[:lower:]')
-    elif [ -f /etc/debian_version ]; then
-        os_id="debian"
-    elif [ -f /etc/arch-release ]; then
-        os_id="arch"
-    elif [ -f /etc/redhat-release ]; then
-        os_id="fedora"
-    elif [ -f /etc/SuSE-release ]; then
-        os_id="opensuse"
+    if [[ -r /etc/os-release ]]; then
+        # shellcheck disable=SC1091
+        . /etc/os-release
+        OS_ID="${ID:-unknown}"
+        OS_ID_LIKE="${ID_LIKE:-}"
+        OS_PRETTY="${PRETTY_NAME:-$OS_ID}"
     fi
 
-    case "$os_id" in
-        debian|ubuntu|mint|pop|kali|elementary|raspbian|neon)
-            echo "debian"
-            return 0
-            ;;
-        arch|manjaro|endeavouros|garuda|artix|cachyos)
-            echo "arch"
-            return 0
-            ;;
-        fedora|rhel|rocky|almalinux|centos|nobara|ol)
-            echo "fedora"
-            return 0
-            ;;
-        opensuse*|suse|sles)
-            echo "opensuse"
-            return 0
-            ;;
-        alpine)
-            echo "alpine"
-            return 0
+    local haystack=" ${OS_ID,,} ${OS_ID_LIKE,,} "
+    case "$haystack" in
+        *debian*|*ubuntu*) OS_FAMILY="debian" ;;
+        *arch*) OS_FAMILY="arch" ;;
+        *fedora*|*rhel*|*centos*) OS_FAMILY="fedora" ;;
+        *suse*|*opensuse*) OS_FAMILY="opensuse" ;;
+        *)
+            command_exists apt-get && OS_FAMILY="debian"
+            [[ "$OS_FAMILY" == unknown ]] && command_exists pacman && OS_FAMILY="arch"
+            [[ "$OS_FAMILY" == unknown ]] && command_exists dnf && OS_FAMILY="fedora"
+            [[ "$OS_FAMILY" == unknown ]] && command_exists zypper && OS_FAMILY="opensuse"
             ;;
     esac
 
-    for like in $os_like; do
-        case "$like" in
-            *debian*|*ubuntu*)
-                echo "debian"
-                return 0
-                ;;
-            *arch*)
-                echo "arch"
-                return 0
-                ;;
-            *fedora*|*rhel*|*centos*)
-                echo "fedora"
-                return 0
-                ;;
-            *suse*)
-                echo "opensuse"
-                return 0
-                ;;
-        esac
-    done
+    [[ "$OS_FAMILY" != "unknown" ]]
+}
 
-    if command_exists apt-get; then
-        echo "debian"
-    elif command_exists pacman; then
-        echo "arch"
-    elif command_exists dnf || command_exists yum; then
-        echo "fedora"
-    elif command_exists zypper; then
-        echo "opensuse"
-    elif command_exists apk; then
-        echo "alpine"
+resolve_target_user() {
+    TARGET_USER="${DOTFILES_TARGET_USER:-${SUDO_USER:-${USER:-}}}"
+    [[ -n "$TARGET_USER" ]] || TARGET_USER="$(id -un 2>/dev/null || printf root)"
+    if ! id "$TARGET_USER" >/dev/null 2>&1; then
+        msg_error "Target user '$TARGET_USER' does not exist."
+        return 1
+    fi
+    TARGET_HOME="$(getent passwd "$TARGET_USER" 2>/dev/null | awk -F: 'NR==1{print $6}')"
+    [[ -n "$TARGET_HOME" ]] || TARGET_HOME="$( [[ "$TARGET_USER" == root ]] && printf /root || printf '/home/%s' "$TARGET_USER" )"
+    TARGET_GROUP="$(id -gn "$TARGET_USER" 2>/dev/null || printf "$TARGET_USER")"
+    export TARGET_USER TARGET_HOME TARGET_GROUP
+}
+
+require_linux() {
+    [[ "$(uname -s 2>/dev/null)" == "Linux" ]] || {
+        msg_error "This assistant targets Linux hosts."
+        return 1
+    }
+}
+
+ensure_root() {
+    (( EUID == 0 )) && return 0
+    command_exists sudo || {
+        msg_error "Root privileges are required and sudo is not installed."
+        return 1
+    }
+    local target="${TARGET_USER:-${USER:-}}"
+    exec sudo --preserve-env=TERM,NO_COLOR,DOTFILES_NO_COLOR env DOTFILES_TARGET_USER="$target" bash "$0" "$@"
+}
+
+run_as_root() {
+    if (( EUID == 0 )); then
+        "$@"
+    elif command_exists sudo; then
+        sudo -- "$@"
     else
-        echo "unknown"
+        msg_error "Root privileges are required for: $*"
         return 1
     fi
 }
 
-
-detect_hypervisor() {
-    local raw_virt=""
-
-    if command_exists systemd-detect-virt; then
-        raw_virt=$(systemd-detect-virt 2>/dev/null || true)
-    fi
-
-    if [[ -z "$raw_virt" || "$raw_virt" == "none" ]]; then
-        local dmi_info=""
-
-        if [[ -f /sys/class/dmi/id/sys_vendor || -f /sys/class/dmi/id/product_name ]]; then
-            dmi_info="$(cat /sys/class/dmi/id/sys_vendor /sys/class/dmi/id/product_name 2>/dev/null | tr '[:upper:]' '[:lower:]')"
-        fi
-
-        case "$dmi_info" in
-            *virtualbox*|*innotek*) raw_virt="virtualbox" ;;
-            *vmware*)               raw_virt="vmware" ;;
-            *qemu*)                 raw_virt="qemu" ;;
-            *kvm*)                  raw_virt="kvm" ;;
-            *microsoft*|*hyper-v*)  raw_virt="hyperv" ;;
-            *xen*)                  raw_virt="xen" ;;
-        esac
-    fi
-
-    local target_hypervisor=""
-
-    case "${raw_virt}" in
-        oracle|virtualbox)     target_hypervisor="virtualbox" ;;
-        vmware)                target_hypervisor="vmware" ;;
-        qemu|bochs)            target_hypervisor="qemu" ;;
-        kvm)                   target_hypervisor="kvm" ;;
-        microsoft|hyper-v)     target_hypervisor="hyperv" ;;
-        xen)                   target_hypervisor="xen" ;;
-        bhyve)                 target_hypervisor="bhyve" ;;
-        wsl)                   target_hypervisor="wsl" ;;
-        none|"")               target_hypervisor="none" ;;
-        *)                     target_hypervisor="${raw_virt}" ;;
-    esac
-
-    echo "$target_hypervisor"
-
-    if [[ "$target_hypervisor" == "none" ]]; then
-        return 1
-    fi
-    
-    return 0
-}
-
-is_server_environment() {
-    local default_target
-    default_target=$(systemctl get-default 2>/dev/null || echo "")
- 
-    if [[ "$default_target" == "graphical.target" ]]; then
-        return 1 # Desktop environment
-    fi
-
-    if pgrep -x "Xorg" &>/dev/null || pgrep -x "wayland" &>/dev/null || \
-       systemctl is-active --quiet gdm 2>/dev/null || \
-       systemctl is-active --quiet gdm3 2>/dev/null || \
-       systemctl is-active --quiet lightdm 2>/dev/null || \
-       systemctl is-active --quiet sddm 2>/dev/null; then
-        return 1 # Desktop environment
-    fi
-
-    return 0 # Server environment
-}
-
-# Check if running under Windows Subsystem for Linux (WSL)
-is_wsl() {
-    [[ -n "${WSL_DISTRO_NAME:-}" ]] || grep -qi "microsoft" /proc/version 2>/dev/null
-}
-
-is_ci() {
-    [[ -n "${CI:-}" || -n "${GITHUB_ACTIONS:-}" || -n "${GITLAB_CI:-}" || -n "${CIRCLECI:-}" ]]
-}
-
-# Example: copy_with_backup "app.conf" "/etc/app.conf" "www-data"
-copy_with_backup() {
-    local src="$1"
-    local dest="$2"
-    local user="$3"
-
-    if [[ ! -f "$src" ]]; then
-        msg_error "Source file '$src' does not exist."
-        return 1
-    fi
-
-    if [[ -f "$dest" ]]; then
-        local backup_file="$dest.bak"
-
-        if [[ ! -f "$backup_file" ]]; then
-            msg_warn "Existing file found at '$dest'. Backing up to '$backup_file'..."
-            cp -f "$dest" "$backup_file"
-            chown "$user:" "$backup_file"
+run_as_target() {
+    if (( EUID == 0 )) && [[ "${TARGET_USER:-root}" != "root" ]]; then
+        if command_exists sudo; then
+            sudo -H -u "$TARGET_USER" -- "$@"
         else
-            msg_info "Backup '$backup_file' already exists. Skipping backup creation to preserve the original."
+            runuser -u "$TARGET_USER" -- "$@"
         fi
-    fi
-
-    msg_info "Copying '$(basename "$src")' -> '$dest'..."
-    cp -f "$src" "$dest"
-    chown "$user:" "$dest" 
-}
-
-print_section() {
-    echo -e "\n${boldWhite}===> $*${endColour}" >&2
-}
-
-check_root() {
-    if [[ $EUID -ne 0 ]]; then
-        msg_error "This script requires root privileges. Please run with sudo."
-        exit 1
-    fi
-}
-
-
-# Example: require_commands "git" "curl" "jq"
-require_commands() {
-    local missing=()
-
-    for cmd in "$@"; do
-        if ! command_exists "$cmd"; then
-            missing+=("$cmd")
-        fi
-    done
-
-    if [[ ${#missing[@]} -gt 0 ]]; then
-        msg_error "Missing required dependencies: ${missing[*]}"
-        return 1
-    fi
-}
-
-# Example: clean_slug=$(slugify " My Project Name #1! ") --> my-project-name-#1
-slugify() {
-    echo "$1" | tr '[:upper:]' '[:lower:]' | sed -E 's/[^a-z0-9]+/-/g' | sed -E 's/^-|-$//g'
-}
-
-# Example: trimmed_str=$(trim "   lots of whitespace   ")
-trim() {
-    local var="$*"
-    var="${var#"${var%%[![:space:]]*}"}"
-    var="${var%"${var##*[![:space:]]}"}"
-    echo -n "$var"
-}
-
-# Example: if prompt_confirmation "Overwrite existing database?" "N"; then drop_db; fi
-prompt_confirmation() {
-    local prompt_msg="$1"
-    local default_ans="${2:-N}"
-    local response
-    
-    read -rp "$(echo -e "${yellowColour}[?] ${prompt_msg} [y/N]: ${endColour}")" response
-    response="${response:-$default_ans}"
-    
-    if [[ ! "$response" =~ ^[Yy]$ ]]; then
-        msg_info "Operation cancelled by user."
-        return 1
-    fi
-
-    return 0
-}
-
-# Example: long_running_task & spinner $! "Extracting big archive..."
-### A quick test to see if its working ###
-#   sleep 4 &
-#   spinner $! "Downloading packages..."
-spinner() {
-    local pid="$1"
-    local delay=0.1
-    local spinstr="|/-\\"
-    local msg="${2:-Working...}"
-
-    while kill -0 "$pid" 2>/dev/null; do
-        local temp=${spinstr#?}
-        printf "  ${cyanColour}[%c]${endColour} %s\r" "$spinstr" "$msg" >&2
-        spinstr=$temp${spinstr%"$temp"}
-        sleep $delay
-    done
-    printf "    \r" >&2
-}
-
-ensure_sudo_installed() {
-    if ! command -v sudo &>/dev/null; then
-        msg_info "'sudo' is not installed."
-
-        if [[ $EUID -ne 0 ]]; then
-            msg_error "'sudo' is missing and script is not running as root. Run with 'su -c ./script.sh' or install sudo manually."
-            exit 1
-        fi
-
-        msg_info "Installing 'sudo'..."
-        if command -v pacman &>/dev/null; then
-            pacman -S --noconfirm --needed sudo
-        elif command -v apt-get &>/dev/null; then
-            apt-get update -q && apt-get install -y -q sudo
-        fi
-    fi
-}
-
-# Example: ensure_dir "/var/log/my-app"
-ensure_dir() {
-    local dir="$1"
-
-    if [[ ! -d "$dir" ]]; then
-        mkdir -p "$dir" || die "Failed to create directory: $dir"
-    fi
-}
-
-# Example: download_file "https://example.com/config.json" "/tmp/config.json"
-download_file() {
-    local url="$1"
-    local dest="$2"
-
-    msg_download "Downloading $url -> $dest"
-    if command_exists curl; then
-        curl -fsSL "$url" -o "$dest"
-    elif command_exists wget; then
-        wget -qO "$dest" "$url"
     else
-        msg_error "Neither curl nor wget is available."
-        return 1
+        "$@"
     fi
 }
 
-# Example: show_progress_bar "$current_step" "$total_steps" 40
-### Quick test to see if its working ###
-#   total_items=20
+load_distro_module() {
+    local root="$1" module=""
+    module="${root}/bash/distros/${OS_FAMILY}.sh"
+    [[ -r "$module" ]] || {
+        msg_error "No package module for OS family '$OS_FAMILY': $module"
+        return 1
+    }
+    # shellcheck disable=SC1090
+    source "$module"
+}
 
-#   for ((i=1; i<=total_items; i++)); do
-#     sleep 0.15
-#     show_progress_bar "$i" "$total_items" 30
-#   done
-
-show_progress_bar() {
-    local current="$1"
-    local total="$2"
-    local width="${3:-30}"
-
-    if [[ "$total" -eq 0 ]]; then
+pkg_refresh_once() {
+    (( DOTFILES_PKG_REFRESHED == 1 )) && return 0
+    if pkg_refresh; then
+        DOTFILES_PKG_REFRESHED=1
         return 0
     fi
+    return 1
+}
 
-    local percent=$(( current * 100 / total ))
-    local filled_len=$(( current * width / total ))
-    local empty_len=$(( width - filled_len ))
+filter_available_packages() {
+    VALID_PACKAGES=()
+    local pkg
+    for pkg in "$@"; do
+        [[ -n "$pkg" ]] || continue
+        if pkg_available "$pkg"; then
+            VALID_PACKAGES+=("$pkg")
+        else
+            msg_skip "Package unavailable in configured official repositories: $pkg"
+        fi
+    done
+}
 
-    local filled=""
-    local empty=""
+install_packages() {
+    (($#)) || return 0
+    pkg_refresh_once || msg_warn "Repository metadata refresh failed; trying package installation with current metadata."
+    filter_available_packages "$@"
+    ((${#VALID_PACKAGES[@]})) || {
+        msg_warn "No requested packages are available from configured repositories."
+        return 0
+    }
+    msg_exec "Installing ${#VALID_PACKAGES[@]} package(s) from configured distribution repositories."
+    pkg_install "${VALID_PACKAGES[@]}"
+}
 
-    if [[ "$filled_len" -gt 0 ]]; then
-        printf -v filled "%${filled_len}s"
-        filled="${filled// /█}"
+package_group_install() {
+    local group="$1" var=""
+    var="DISTRO_PACKAGES_${group^^}"
+    # shellcheck disable=SC1083
+    local -n ref="$var"
+    install_packages "${ref[@]}"
+}
+
+backup_path() {
+    local path="$1" rel="" dest=""
+    [[ -e "$path" || -L "$path" ]] || return 0
+    rel="${path#/}"
+    dest="${DOTFILES_BACKUP_HOME}/${DOTFILES_RUN_ID}/${rel}"
+    mkdir -p "$(dirname "$dest")"
+    cp -a -- "$path" "$dest"
+    if (( EUID == 0 )) && [[ -n "${TARGET_USER:-}" && "${TARGET_USER:-root}" != root ]]; then
+        chown -R "$TARGET_USER:${TARGET_GROUP:-$(id -gn "$TARGET_USER" 2>/dev/null || printf "$TARGET_USER")}" "$dest" 2>/dev/null || true
     fi
+}
 
-    if [[ "$empty_len" -gt 0 ]]; then
-        printf -v empty "%${empty_len}s"
-        empty="${empty// /░}"
+copy_with_backup() {
+    local src="$1" dest="$2" owner="${3:-${TARGET_USER:-root}}" mode="${4:-}"
+    [[ -f "$src" ]] || { msg_error "Source file not found: $src"; return 1; }
+    mkdir -p "$(dirname "$dest")"
+    backup_path "$dest"
+    local tmp="${dest}.dotfiles.$$"
+    cp -- "$src" "$tmp" || return 1
+    [[ -n "$mode" ]] && chmod "$mode" "$tmp"
+    if (( EUID == 0 )); then
+        chown "$owner:$(id -gn "$owner" 2>/dev/null || printf "$owner")" "$tmp" 2>/dev/null || true
     fi
+    mv -f -- "$tmp" "$dest"
+}
 
-    printf "\r\033[K\033[1;36m[Generating...]\033[0m [%s%s] %3d%% (%d/%d)" "$filled" "$empty" "$percent" "$current" "$total"
+ensure_line() {
+    local file="$1" line="$2"
+    mkdir -p "$(dirname "$file")"
+    touch "$file"
+    grep -Fqx -- "$line" "$file" 2>/dev/null || printf '%s\n' "$line" >>"$file"
+}
 
-    if [[ "$current" -eq "$total" ]]; then
-        echo ""
+service_exists() {
+    command_exists systemctl || return 1
+    systemctl list-unit-files "$1" --no-legend 2>/dev/null | grep -q .
+}
+
+safe_service_enable_now() {
+    local unit="$1"
+    service_exists "$unit" || { msg_skip "systemd unit not installed: $unit"; return 0; }
+    systemctl enable --now "$unit"
+}
+
+file_sha256() {
+    if command_exists sha256sum; then
+        sha256sum "$1" | awk '{print $1}'
+    elif command_exists shasum; then
+        shasum -a 256 "$1" | awk '{print $1}'
+    else
+        printf 'unavailable'
     fi
 }

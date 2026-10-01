@@ -1,102 +1,67 @@
-#!/usr/bin/env bash
-set -euo pipefail
-
-# Global default variables
-SSH_PORT="${SSH_PORT:-22}"
-ALLOWED_SERVICES=("80/tcp" "443/tcp")
+# shellcheck shell=bash
+# Sourced module: defines apply_nftables_rules; performs no action on import.
 
 apply_nftables_rules() {
-    msg_info "Starting network hardening with nftables..."
+    command_exists nft || { msg_error "nftables is not installed."; return 1; }
+    local existing="" ssh_port="" tmp=""
+    existing="$(nft list ruleset 2>/dev/null || true)"
 
-    if ! command_exists nft; then
-        msg_error "nftables is not installed. Please install it first."
+    if [[ -n "${existing//[[:space:]]/}" ]]; then
+        msg_warn "An existing nftables ruleset is present. The assistant will not flush or replace it."
+        msg_info "Use the existing firewall policy or review it manually."
         return 1
     fi
 
-    # Security check: Ensure we don't drop existing SSH connections blindly
-    if [[ -n "${SSH_CLIENT:-}" || -n "${SSH_TTY:-}" ]]; then
-        msg_warn "SSH session detected. Ensuring port $SSH_PORT is authorized before resetting."
+    if [[ -s /etc/nftables.conf ]] && grep -Evq '^[[:space:]]*(#|$)' /etc/nftables.conf; then
+        msg_warn "/etc/nftables.conf already contains active configuration while the runtime ruleset is empty."
+        msg_warn "Refusing to replace a dormant/custom firewall configuration automatically."
+        return 1
     fi
 
-    systemctl enable --now nftables &>/dev/null || true
-
-    msg_info "Flushing existing nftables ruleset..."
-    nft flush ruleset
-
-    # Base table and filtering chain creation
-    msg_info "Creating base inet filter table and chains..."
-    nft add table inet filter
-    nft add chain inet filter input '{ type filter hook input priority filter; policy drop; }'
-    nft add chain inet filter forward '{ type filter hook forward priority filter; policy drop; }'
-    nft add chain inet filter output '{ type filter hook output priority filter; policy accept; }'
-
-    # Connection tracking and INVALID packet drops
-    msg_info "Configuring connection tracking and INVALID packet drops..."
-    nft add rule inet filter input ct state established,related accept
-    nft add rule inet filter input ct state invalid drop
-
-    # Loopback interface protections
-    msg_info "Applying loopback protections..."
-    nft add rule inet filter input iifname "lo" accept
-    nft add rule inet filter input ip saddr 127.0.0.0/8 drop
-    nft add rule inet filter input ip6 saddr ::1 drop
-
-    # Anti brute-force for SSH (modern nftables meter syntax)
-    msg_info "Configuring SSH anti brute-force protection on port ${SSH_PORT}..."
-    nft add set inet filter ssh_meter '{ type ipv4_addr; flags dynamic, timeout; timeout 1m; }'
-    nft add rule inet filter input tcp dport "${SSH_PORT}" add @ssh_meter { ip saddr limit rate over 10/minute } drop
-    nft add rule inet filter input tcp dport "${SSH_PORT}" accept
-
-    # Public services and allowed ports
-    for service in "${ALLOWED_SERVICES[@]}"; do
-        IFS="/" read -r port proto <<< "$service"
-        msg_info "Allowing traffic on port ${port}/${proto}..."
-        nft add rule inet filter input "${proto}" dport "${port}" accept
-    done
-
-    # Hypervisor detection and rule injection
-    local hypervisor
-    hypervisor=$(detect_hypervisor || true)
-
-    if [[ "$hypervisor" == "virtualbox" ]]; then
-        msg_info "VirtualBox environment detected. Injecting network isolation rules into nftables output chain..."
-
-        # 1. Allow outbound traffic to the VirtualBox NAT Gateway (10.0.2.2)
-        nft add rule inet filter output ip daddr 10.0.2.2 accept
-
-        # 2. Deny outbound traffic to private local network ranges (RFC 1918)
-        # Prevents the VM from scanning or accessing the host's local LAN
-        nft add rule inet filter output ip daddr { 10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16 } drop
-
-        msg_success "VirtualBox nftables network isolation rules applied."
-    else
-        msg_skip "Hypervisor is '$hypervisor'. Skipping VirtualBox-specific nftables rules."
-
-        # Block noisy or vulnerable local protocols on non-VirtualBox environments
-        msg_info "Blocking mDNS, NetBIOS, and SMB..."
-        nft add rule inet filter input udp dport 5353 drop
-        nft add rule inet filter input udp dport { 137, 138 } drop
-        nft add rule inet filter input tcp dport { 139, 445 } drop
-
-        # Specific internal rules for physical local network (CUPS)
-        msg_info "Allowing CUPS local printer traffic from 192.168.1.0/24..."
-        nft add rule inet filter input ip saddr 192.168.1.0/24 tcp dport 631 accept
+    if [[ -n "${SSH_CONNECTION:-}" ]]; then
+        ssh_port="$(awk '{print $4}' <<<"$SSH_CONNECTION")"
+        [[ "$ssh_port" =~ ^[0-9]+$ ]] || ssh_port=""
     fi
 
-    # Save rules for persistence
-    msg_info "Saving nftables ruleset for persistence..."
-    if [[ -d /etc/nftables.conf.d ]]; then
-        nft list ruleset > /etc/nftables.conf.d/hardening.nft
-    else
-        nft list ruleset > /etc/nftables.conf
+    hardening_backup_path /etc/nftables.conf || return 1
+    hardening_record_service nftables.service
+    tmp="$(mktemp)" || return 1
+    cat >"$tmp" <<EOF_RULES
+#!/usr/sbin/nft -f
+# Managed by Dotfiles System Hardening Assistant.
+
+table inet dotfiles_filter {
+    chain input {
+        type filter hook input priority 0; policy drop;
+        iifname "lo" accept
+        ct state established,related accept
+        ct state invalid drop
+        # DHCP client renewals/offers may arrive before conntrack considers a flow established.
+        udp sport 67 udp dport 68 accept
+        udp sport 547 udp dport 546 accept
+        ip protocol icmp accept
+        ip6 nexthdr ipv6-icmp accept
+EOF_RULES
+    if [[ -n "$ssh_port" ]]; then
+        printf '        tcp dport %s ct state new accept comment "preserve active SSH management"\n' "$ssh_port" >>"$tmp"
     fi
-
-    msg_success "nftables configured and applied successfully."
-
-    print_separator
-    echo -e "${cyanColour}=== NFTABLES CURRENT STATUS ===${endColour}"
-    nft list ruleset
-    print_separator
+    cat >>"$tmp" <<'EOF_RULES'
+    }
+    chain forward {
+        type filter hook forward priority 0; policy accept;
+    }
+    chain output {
+        type filter hook output priority 0; policy accept;
+    }
 }
+EOF_RULES
 
-apply_nftables_rules
+    nft -c -f "$tmp" || { rm -f "$tmp"; msg_error "Generated nftables policy failed syntax validation."; return 1; }
+    mkdir -p /etc
+    cp "$tmp" /etc/nftables.conf
+    chmod 0644 /etc/nftables.conf
+    rm -f "$tmp"
+    nft -f /etc/nftables.conf || return 1
+    service_exists nftables.service && systemctl enable nftables.service >/dev/null 2>&1 || true
+    nft list ruleset
+}

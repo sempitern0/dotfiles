@@ -1,54 +1,23 @@
 #!/usr/bin/env bash
-set -euo pipefail
+# Show process ancestry/tree without unnecessary privilege escalation.
+set -u
+set -o pipefail
 
-# Display usage instructions
-show_help() {
-  cat <<EOF
-Command usage:
-  ./ps_tree.sh <PID>
-  ./ps_tree.sh -h | --help
-EOF
-}
+PID="${1:-}"
+[[ "$PID" == -h || "$PID" == --help ]] && { printf 'Usage: pstree-info <PID>\n'; exit 0; }
+[[ "$PID" =~ ^[0-9]+$ ]] || { printf 'Usage: pstree-info <PID>\n' >&2; exit 2; }
+[[ -d "/proc/$PID" ]] || { printf 'PID %s does not exist.\n' "$PID" >&2; exit 1; }
 
-# 1. Check if at least one argument was provided
-if [[ $# -eq 0 ]]; then
-  echo "Error: A PID is required." >&2
-  show_help
-  exit 1
-fi
-
-# 2. Handle the help flag (accessible without root privileges)
-if [[ "$1" == "-h" || "$1" == "--help" ]]; then
-  show_help
-  exit 0
-fi
-
-# 3. Elevate privileges using sudo if not running as root (EUID != 0)
-if [[ $EUID -ne 0 ]]; then
-  echo "[+] Re-running with administrator privileges (sudo)..." >&2
-  exec sudo "$0" "$@"
-fi
-
-ROOT_PID="$1"
-
-# 4. Validate that the ROOT_PID is a valid numerical integer
-if ! [[ "$ROOT_PID" =~ ^[0-9]+$ ]]; then
-  echo "Error: PID '$ROOT_PID' must be a valid integer." >&2
-  exit 1
-fi
-
-# 5. Check process existence directly in /proc filesystem
-if [[ ! -d "/proc/$ROOT_PID" ]]; then
-  echo "Error: Process with PID $ROOT_PID does not exist." >&2
-  exit 1
-fi
-
-# 6. Extract child PIDs excluding threads (-T) and using ASCII formatting (-A)
-PIDS=$(pstree -p -T -A "$ROOT_PID" 2>/dev/null | grep -oP '\(\K[0-9]+(?=\))' | tr '\n' ',' | sed 's/,$//')
-
-# 7. Display the process hierarchy using ps
-if [[ -n "$PIDS" ]]; then
-  ps -f -H -p "$PIDS"
+printf 'Process details\n--------------------------------------------------------------------------------\n'
+ps -p "$PID" -o pid,ppid,user,stat,etimes,%cpu,%mem,args 2>/dev/null || true
+printf '\nProcess ancestry / descendants\n--------------------------------------------------------------------------------\n'
+if command -v pstree >/dev/null 2>&1; then
+    pstree -aps "$PID" 2>/dev/null || pstree -ap "$PID" 2>/dev/null || true
 else
-  ps -f -p "$ROOT_PID"
+    printf 'pstree is unavailable; ancestry from ps:\n'
+    current="$PID"
+    while [[ "$current" =~ ^[0-9]+$ && "$current" -gt 1 ]]; do
+        ps -p "$current" -o pid=,ppid=,user=,args= 2>/dev/null || break
+        current="$(ps -p "$current" -o ppid= 2>/dev/null | tr -d ' ')"
+    done
 fi

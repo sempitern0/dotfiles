@@ -1,15 +1,15 @@
 #!/usr/bin/env bash
-# OBJECTIVE: Audit open local listening ports and mapped binaries.
-set -euo pipefail
+# Display local listening sockets using iproute2's ss output (IPv4 and IPv6 safe).
+set -u
+set -o pipefail
 
-echo -e "\n[+] Open Listening Ports & Mapped Processes"
-echo "----------------------------------------------------------------------"
-printf "%-10s %-10s %-25s %-20s\n" "PROTO" "PORT" "LISTEN ADDR" "PROCESS (PID)"
-echo "----------------------------------------------------------------------"
-
-ss -tulpn | awk 'NR>1 {
-    proto=$1; local=$5; proc=$7;
-    split(local, a, ":"); port=a[length(a)];
-    sub(":"port, "", local);
-    printf "%-10s %-10s %-25s %-20s\n", proto, port, local, proc
-}'
+command -v ss >/dev/null 2>&1 || { printf 'ss (iproute2) is required.\n' >&2; exit 1; }
+echo "Listening TCP/UDP sockets"
+echo "--------------------------------------------------------------------------------"
+if (( EUID == 0 )); then
+    ss -H -lntup 2>/dev/null || ss -H -lntu
+else
+    ss -H -lntup 2>/dev/null || ss -H -lntu
+    echo
+    echo "Tip: run with sudo if process/PID information is hidden by the kernel."
+fi

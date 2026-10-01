@@ -1,11 +1,25 @@
 #!/usr/bin/env bash
-# OBJECTIVE: Parse system journal for authentication events and SSH failures.
-set -euo pipefail
+# Summarize recent authentication activity from systemd-journald.
+set -u
+set -o pipefail
 
-echo -e "\n[+] Recent Failed SSH Login Attempts"
-echo "----------------------------------------------------------------------"
-journalctl -u ssh -u sshd --no-pager -n 50 2>/dev/null | grep -E "Failed password|Invalid user" | tail -n 10 || echo "No recent SSH failures."
+HOURS="${1:-24}"
+[[ "$HOURS" =~ ^[0-9]+$ ]] || { printf 'Usage: authaudit [hours]\n' >&2; exit 2; }
+command -v journalctl >/dev/null 2>&1 || { printf 'journalctl is not available.\n' >&2; exit 1; }
 
-echo -e "\n[+] Recent Sudo Executions"
-echo "----------------------------------------------------------------------"
-journalctl _COMM=sudo --no-pager -n 10 2>/dev/null | grep COMMAND | tail -n 10 || echo "No recent sudo activity."
+SINCE="${HOURS} hours ago"
+
+echo
+echo "SSH authentication events — last ${HOURS}h"
+echo "--------------------------------------------------------------------------------"
+journalctl --since "$SINCE" -u ssh.service -u sshd.service --no-pager -o short-iso 2>/dev/null |
+    grep -Ei 'Accepted |Failed |Invalid user|authentication failure|Connection closed by authenticating user' |
+    tail -n 40 || true
+
+echo
+echo "sudo / privilege events — last ${HOURS}h"
+echo "--------------------------------------------------------------------------------"
+{
+    journalctl --since "$SINCE" _COMM=sudo --no-pager -o short-iso 2>/dev/null || true
+    journalctl --since "$SINCE" SYSLOG_IDENTIFIER=sudo --no-pager -o short-iso 2>/dev/null || true
+} | awk '!seen[$0]++' | tail -n 40

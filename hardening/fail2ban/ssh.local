@@ -1,6 +1,4 @@
 [sshd]
-mode = extra
 enabled = true
+mode = normal
 port = ssh
-logpath = %(sshd_log)s
-backend = %(sshd_backend)s

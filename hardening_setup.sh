@@ -1,1119 +1,614 @@
 #!/usr/bin/env bash
-set -euo pipefail
+# Dotfiles System Hardening Assistant
+# Balanced workstation security with explicit high-impact modules and rollback.
 
-CURRENT_DIR=$(dirname -- "$(readlink -f -- "$0")")
+# No `set -e`: interactive modules may fail or be unavailable without terminating
+# the control plane. nounset/pipefail still catch real programming mistakes.
+set -u
+set -o pipefail
+IFS=$'\n\t'
+umask 077
 
-source "${CURRENT_DIR}/lib/common.sh"
+SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" >/dev/null 2>&1 && pwd -P)"
+# shellcheck source=lib/common.sh
+source "$SCRIPT_DIR/lib/common.sh"
 
-SYSCTL_DIR="/etc/sysctl.d"
+SCRIPT_VERSION="2.0.0-balanced-workstation"
+ORIGINAL_ARGS=("$@")
+HARDENING_ROOT="/var/backups/dotfiles-hardening"
+HARDENING_SNAPSHOT=""
+HARDENING_MANIFEST=""
+HARDENING_SERVICES=""
+declare -A HARDENING_BACKED=()
+declare -A HARDENING_SERVICE_RECORDED=()
 
-UFW_BEFORE_RULES="/etc/ufw/before.rules"
-UFW_RULES="$CURRENT_DIR/hardening/network/ufw.sh"
-NFTABLES_RULES="$CURRENT_DIR/hardening/network/nftables.sh"
-FIREWALLD_RULES="$CURRENT_DIR/hardening/network/firewalld.sh"
+usage() {
+    cat <<EOF_HELP
+Dotfiles System Hardening Assistant v${SCRIPT_VERSION}
 
-QUAD9_DNS="$CURRENT_DIR/hardening/network/quad9_dns.sh"
-
-HARDWARE_HARDENING_RULES="$CURRENT_DIR/hardening/hardware/memory_hardening.sh"
-ANTIVIRUS_SETUP="$CURRENT_DIR/hardening/antivirus/antivirus.sh"
-KERNEL_NETWORK_HARDENING_CONF="$CURRENT_DIR/hardening/network/99-hardening.conf"
-
-FAIL2BAN_CONF_DIR="${CURRENT_DIR}/hardening/fail2ban"
-APT_CONF_DIR="/etc/apt/apt.conf.d"
-
-BACKUP_DIR="/var/backups/hardening_suite"
-BACKUP_ARCHIVE="${BACKUP_DIR}/system_hardening_initial_state.tar.gz"
-
-
-print_banner() {
-    echo -e "${cyanColour}"
-    cat << "EOF"
-  .---.   ██╗  ██╗ █████╗ ██████╗ ██████╗ 
- /  |  \  ██║  ██║██╔══██╗██╔══██╗██╔══██╗
-|   |   | ███████║███████║██████╔╝██║  ██║
- \  |  /  ██╔══██║██╔══██║██╔══██╗██║  ██║
-  '---'   ██║  ██║██║  ██║██║  ██║██████╔╝
-          ╚═╝  ╚═╝╚═╝  ╚═╝╚═╝  ╚═╝╚═════╝ 
-EOF
-    echo -e "${endColour}"
-    echo -e "${purpleColour}=== System Hardening & Security Suite ===${endColour}"
-    echo -e "${grayColour}OS Family: ${endColour}${cyanColour}${1:-Unknown}${endColour} | ${grayColour}Package Manager: ${endColour}${cyanColour}${2:-Unknown}${endColour}"
-    print_separator
+Usage:
+  sudo ./hardening_setup.sh                 interactive menu
+  sudo ./hardening_setup.sh --audit         read-only security posture
+  sudo ./hardening_setup.sh --recommended   balanced workstation baseline
+  sudo ./hardening_setup.sh --all           run all modules; high-impact modules still confirm
+  sudo ./hardening_setup.sh --restore       select and restore an assistant snapshot
+  sudo ./hardening_setup.sh --no-color
+  sudo ./hardening_setup.sh --help
+EOF_HELP
 }
 
-create_initial_backup() {
-    if [[ -s "$BACKUP_ARCHIVE" ]]; then
-        return 0
-    fi
-
-    ## Remove the file if it is corrupted with 0 bytes size.
-    [[ -f "$BACKUP_ARCHIVE" ]] && rm -f "$BACKUP_ARCHIVE"
-   
-    msg_info "First execution detected. Creating initial system backup..."
-    mkdir -p "$BACKUP_DIR"
-
-    local paths_to_backup=(
-        "/etc/ssh"
-        "/etc/fstab"
-        "/etc/login.defs"
-        "/etc/sysctl.conf"
-        "/etc/sysctl.d"
-        "/etc/default/grub"
-        "/etc/fail2ban"
-        "/etc/usbguard"
-        "/etc/apt/apt.conf.d"
-        "/etc/clamav"
-        "/etc/chkrootkit.conf"
-        "/etc/cron.daily"
-        "/etc/resolv.conf"           
-        "/etc/systemd/resolved.conf.d"
-    )
-
-    local existing_paths=()
-
-    for path in "${paths_to_backup[@]}"; do
-        if [[ -e "$path" ]]; then
-            existing_paths+=("$path")
-        fi
-    done
-
-    if [[ ${#existing_paths[@]} -gt 0 ]]; then
-        if tar -czf "$BACKUP_ARCHIVE" "${existing_paths[@]}" 2>/dev/null; then
-            msg_success "Initial pre-hardening backup saved to: $BACKUP_ARCHIVE"
-        else
-            msg_error "Failed to create backup archive at $BACKUP_ARCHIVE"
-            return 1
-        fi
-    else
-        msg_warn "No standard configuration paths found to back up."
-    fi
-
-    print_separator
-    read -rp "Press [ENTER] to continue to menu..."
-}
-
-restore_backup() {
-    if [[ ! -f "$BACKUP_ARCHIVE" ]]; then
-        msg_error "No initial backup found at $BACKUP_ARCHIVE."
+prepare_context() {
+    require_linux || return 1
+    resolve_target_user || return 1
+    ensure_root "${ORIGINAL_ARGS[@]}" || return 1
+    detect_distribution || {
+        msg_error "Unsupported Linux package family. Hardening requires Debian/Ubuntu, Arch, Fedora/RHEL-like or openSUSE/SLES."
         return 1
-    fi
-
-    print_separator
-    msg_warn "RESTORE INITIAL CONFIGURATION"
-    msg_warn "This will overwrite current SSH, Firewall, DNS, Umask, Sysctl, and system settings"
-    msg_warn "with the initial state saved on the first execution."
-    print_separator
-
-    read -rp "Are you SURE you want to restore initial configurations? [y/N]: " confirm_restore
-    
-    if [[ ! "$confirm_restore" =~ ^[Yy]$ ]]; then
-        msg_info "Restore operation cancelled by user."
-        return 0
-    fi
-
-    # Quad9 DNS avoid permission error
-    chattr -i /etc/resolv.conf 2>/dev/null || true
-
-    msg_info "1/6 Restoring configuration files from initial backup archive..."
-    tar -xzf "$BACKUP_ARCHIVE" -C / 2>/dev/null || true
-
-    msg_info "2/6 Stopping and disabling services enabled during hardening..."
-   
-    local services_to_disable=(
-        "usbguard"
-        "fail2ban"
-        "chrony"
-        "chronyd"
-        "unattended-upgrades"
-        "clamav-freshclam"
-        "clamav-daemon"
-        "freshclam"
-        "clamd"
-    )
-
-    for svc in "${services_to_disable[@]}"; do
-        if systemctl list-unit-files "$svc.service" 2>/dev/null | grep -q "^$svc\.service"; then
-            systemctl disable --now "$svc" &>/dev/null || true
-            msg_info "Stopped and disabled service: $svc"
-        fi
-    done
-
-   msg_info "Checking active firewall engines to disable..."
-
-    # 1. UFW
-    if command_exists ufw || systemctl is-active --quiet ufw 2>/dev/null; then
-        msg_info "Disabling UFW firewall..."
-        ufw disable &>/dev/null || true
-        systemctl disable --now ufw &>/dev/null || true
-    fi
-
-    # 2. firewalld
-    if command_exists firewall-cmd || systemctl is-active --quiet firewalld 2>/dev/null; then
-        msg_info "Disabling firewalld service..."
-        systemctl disable --now firewalld &>/dev/null || true
-    fi
-
-    # 3. nftables
-    if command_exists nft || systemctl is-active --quiet nftables 2>/dev/null; then
-        msg_info "Flushing nftables rules and disabling service..."
-        nft flush ruleset &>/dev/null || true
-        systemctl disable --now nftables &>/dev/null || true
-    fi
-
-    msg_info "3/6 Re-enabling standard background services..."
-   
-    local services_to_enable=(
-        "bluetooth.service"
-        "cups.service"
-        "cups-browsed.service"
-        "avahi-daemon.service"
-        "ModemManager.service"
-        "apport.service"
-        "whoopsie.service"
-        "speech-dispatcher.service"
-        "geoclue.service"
-        "rpcbind.service"
-        "rpcbind.socket"
-    )
-
-    for svc in "${services_to_enable[@]}"; do
-        if systemctl list-unit-files "$svc" 2>/dev/null | grep -q "^$svc"; then
-            systemctl enable "$svc" &>/dev/null || true
-            msg_info "Re-enabled unit: $svc"
-        fi
-    done
-
-    msg_info "4/6 Removing custom drop-in profiles, cron jobs, and log files..."
-    rm -f /etc/profile.d/umask.sh 2>/dev/null || true
-    rm -f /etc/ssh/sshd_config.d/00-hardening.conf 2>/dev/null || true
-    rm -f /etc/ssh/sshd_config.d/99-hardening.conf 2>/dev/null || true
-    rm -f /etc/fail2ban/jail.local /etc/fail2ban/jail.d/ssh.local 2>/dev/null || true
-    rm -f /etc/usbguard/rules.conf 2>/dev/null || true
-    rm -f /etc/cron.daily/lynis-audit 2>/dev/null || true
-    rm -f /etc/cron.daily/chkrootkit 2>/dev/null || true
-    rm -f /var/log/lynis-cron.log /var/log/chkrootkit.log 2>/dev/null || true
-
-    # Quad9 DNS removal
-    rm -f /etc/systemd/resolved.conf.d/quad9.conf 2>/dev/null || true
-
-    if [[ -n "${SYSCTL_DIR:-}" && -n "${KERNEL_NETWORK_HARDENING_CONF:-}" ]]; then
-        local conf_filename="${KERNEL_NETWORK_HARDENING_CONF##*/}"
-        rm -f "${SYSCTL_DIR}/${conf_filename}" 2>/dev/null || true
-    fi
-
-    msg_info "5/6 Resetting mount permissions for /dev/shm..."
-    if mountpoint -q /dev/shm; then
-        mount -o remount,defaults /dev/shm 2>/dev/null || true
-    fi
-
-    msg_info "6/6 Reloading sysctl parameters, DNS, and bootloader..."
-    sysctl --system &>/dev/null || true
-
-    # REINICIAR RESOLVED PARA VOLVER AL DNS POR DEFECTO
-    if systemctl is-active --quiet systemd-resolved 2>/dev/null || systemctl is-enabled --quiet systemd-resolved 2>/dev/null; then
-        msg_info "Restarting systemd-resolved to restore default DNS settings..."
-        systemctl restart systemd-resolved 2>/dev/null || true
-    fi
-
-    if [[ -f /etc/default/grub ]]; then
-        if command_exists update-grub; then
-            update-grub &>/dev/null || true
-        elif command_exists grub-mkconfig; then
-            grub-mkconfig -o /boot/grub/grub.cfg &>/dev/null || true
-        fi
-    fi
-
-    local ssh_service="sshd"
-
-    if systemctl list-unit-files | grep -q "^ssh\.service"; then
-        ssh_service="ssh"
-    fi
-
-    msg_info "Reloading SSH daemon..."
-    systemctl reload "$ssh_service" 2>/dev/null || systemctl restart "$ssh_service" 2>/dev/null || true
-
-    msg_success "Initial system configurations and service states restored successfully."
-    msg_warn "A system reboot is strongly recommended to apply all reverted parameters."
+    }
+    load_distro_module "$SCRIPT_DIR" || return 1
 }
 
-update_system() {
-    local package_manager="$1"
-
-    msg_info "Starting system maintenance using $package_manager..."
-
-    case "$package_manager" in
-        apt)
-            msg_info "Updating repository lists and upgrading packages..."
-            print_separator
-            apt update && apt upgrade -y
-
-            msg_info "Removing unnecessary packages and clearing cache..."
-            print_separator
-            apt autoremove --purge -y && apt autoclean
-            ;;
-        pacman)
-            msg_info "Synchronizing repositories and upgrading system..."
-            print_separator
-            pacman -Syu --noconfirm
-
-            msg_info "Cleaning up orphaned packages..."
-            print_separator
-
-            if pacman -Qtdq &>/dev/null; then
-                pacman -Rns $(pacman -Qtdq) --noconfirm
-            else
-                msg_info "No orphaned packages found to remove."
-            fi
-
-            msg_info "Clearing package cache..."
-            pacman -Sc --noconfirm
-            ;;
-    esac
-
-    msg_success "System update and cleanup completed successfully."
+start_hardening_evidence() {
+    mkdir -p /var/log/dotfiles-hardening
+    chmod 0700 /var/log/dotfiles-hardening
+    DOTFILES_RESULT_FILE="/var/log/dotfiles-hardening/run-$DOTFILES_RUN_ID.tsv"
+    : >"$DOTFILES_RESULT_FILE"
+    chmod 0600 "$DOTFILES_RESULT_FILE"
 }
 
-install_essentials() {
-    local package_manager="$1"
-
-    msg_info "Installing expanded essential CLI & diagnostics suite..."
-
-    case "$package_manager" in
-        apt)
-            apt update -qq
-            apt install -y \
-                curl wget git unzip zip tar psmisc \
-                htop iotop btop \
-                net-tools dnsutils iproute2 ufw \
-                tmux screen tree jq ripgrep eza \
-                build-essential software-properties-common ca-certificates \
-                rsync rclone gnupg
-            ;;
-        pacman)
-            pacman -S --needed --noconfirm \
-                curl wget git unzip zip tar psmisc \
-                htop iotop btop \
-                net-tools bind iproute2 ufw \
-                tmux screen tree jq ripgrep eza \
-                base-devel ca-certificates \
-                rsync rclone gnupg
-            ;;
-        *)
-            msg_error "Unsupported package manager for essential tools."
-            return 1
-            ;;
-    esac
-
-    msg_success "Essential utilities installed successfully."
+hardening_snapshot_init() {
+    [[ -n "$HARDENING_SNAPSHOT" ]] && return 0
+    HARDENING_SNAPSHOT="$HARDENING_ROOT/$DOTFILES_RUN_ID"
+    HARDENING_MANIFEST="$HARDENING_SNAPSHOT/paths.tsv"
+    HARDENING_SERVICES="$HARDENING_SNAPSHOT/services.tsv"
+    mkdir -p "$HARDENING_SNAPSHOT/rootfs" "$HARDENING_SNAPSHOT/evidence"
+    chmod 0700 "$HARDENING_SNAPSHOT" "$HARDENING_SNAPSHOT/rootfs" "$HARDENING_SNAPSHOT/evidence"
+    : >"$HARDENING_MANIFEST"
+    : >"$HARDENING_SERVICES"
+    {
+        printf 'created=%s\n' "$(date -Is)"
+        printf 'host=%s\n' "$(hostname -f 2>/dev/null || hostname)"
+        printf 'os=%s\n' "${OS_PRETTY:-unknown}"
+        printf 'target_user=%s\n' "$TARGET_USER"
+        printf 'version=%s\n' "$SCRIPT_VERSION"
+    } >"$HARDENING_SNAPSHOT/metadata.txt"
+    msg_info "Recovery snapshot: $HARDENING_SNAPSHOT"
 }
 
-apply_kernel_network_hardening() {
-    if [[ ! -f "${KERNEL_NETWORK_HARDENING_CONF:-}" ]]; then
-        msg_warn "Kernel network hardening configuration file not found at: ${KERNEL_NETWORK_HARDENING_CONF:-}"
-        return 0
-    fi
+hardening_backup_path() {
+    local path="$1" key="$1" rel="${1#/}" dst=""
+    hardening_snapshot_init || return 1
+    [[ -z "${HARDENING_BACKED[$key]:-}" ]] || return 0
+    HARDENING_BACKED[$key]=1
 
-    msg_info "Applying kernel network hardening configuration..."
-    mkdir -p "$SYSCTL_DIR"
-
-    local conf_filename="${KERNEL_NETWORK_HARDENING_CONF##*/}"
-
-    cp "$KERNEL_NETWORK_HARDENING_CONF" "$SYSCTL_DIR"
-    chmod 644 "$SYSCTL_DIR/$conf_filename"
-
-    msg_success "Copied $conf_filename to $SYSCTL_DIR (644)."
-    print_separator
-    msg_info "Reloading sysctl network parameters..."
-
-    if sysctl --system &>/dev/null; then
-        msg_success "Sysctl kernel settings reloaded successfully."
+    if [[ -e "$path" || -L "$path" ]]; then
+        dst="$HARDENING_SNAPSHOT/rootfs/$rel"
+        mkdir -p "$(dirname "$dst")"
+        cp -a -- "$path" "$dst" || return 1
+        printf 'PRESENT\t%s\n' "$path" >>"$HARDENING_MANIFEST"
     else
-        msg_warn "Sysctl reloaded with non-fatal warnings."
+        printf 'ABSENT\t%s\n' "$path" >>"$HARDENING_MANIFEST"
     fi
+}
+
+hardening_restore_path_from_current_snapshot() {
+    local path="$1" rel="${1#/}" source="" state=""
+    source="$HARDENING_SNAPSHOT/rootfs/$rel"
+    [[ -n "$HARDENING_SNAPSHOT" && -f "$HARDENING_MANIFEST" ]] || return 1
+    state="$(awk -F '\t' -v p="$path" '$2==p{print $1; exit}' "$HARDENING_MANIFEST")"
+    case "$state" in
+        PRESENT)
+            rm -rf -- "$path"
+            mkdir -p "$(dirname "$path")"
+            cp -a -- "$source" "$path"
+            ;;
+        ABSENT) rm -rf -- "$path" ;;
+        *) return 1 ;;
+    esac
+}
+
+hardening_finalize_snapshot() {
+    [[ -n "${HARDENING_SNAPSHOT:-}" && -d "$HARDENING_SNAPSHOT" ]] || return 0
+    (
+        cd "$HARDENING_SNAPSHOT" || exit 1
+        if command_exists sha256sum; then
+            find rootfs -type f -print0 2>/dev/null | sort -z | xargs -0 -r sha256sum >SHA256SUMS
+            [[ -f networkmanager-dns.env ]] && sha256sum networkmanager-dns.env >>SHA256SUMS
+        fi
+    ) || true
+    printf 'finalized=%s\n' "$(date -Is)" >>"$HARDENING_SNAPSHOT/metadata.txt"
+    chmod 0600 "$HARDENING_SNAPSHOT/metadata.txt" "$HARDENING_SNAPSHOT/paths.tsv" "$HARDENING_SNAPSHOT/services.tsv" 2>/dev/null || true
+}
+
+hardening_record_service() {
+    local unit="$1" enabled="not-found" active="not-found"
+    hardening_snapshot_init || return 1
+    [[ -z "${HARDENING_SERVICE_RECORDED[$unit]:-}" ]] || return 0
+    HARDENING_SERVICE_RECORDED[$unit]=1
+
+    if service_exists "$unit"; then
+        enabled="$(systemctl is-enabled "$unit" 2>/dev/null || true)"
+        active="$(systemctl is-active "$unit" 2>/dev/null || true)"
+        [[ -n "$enabled" ]] || enabled="disabled"
+        [[ -n "$active" ]] || active="inactive"
+    fi
+    printf '%s\t%s\t%s\n' "$unit" "$enabled" "$active" >>"$HARDENING_SERVICES"
+}
+
+restore_snapshot_dir() {
+    local snap="$1" manifest="" services="" state path rel src unit enabled active
+    manifest="$snap/paths.tsv"
+    services="$snap/services.tsv"
+    [[ -d "$snap" && -f "$manifest" ]] || { msg_error "Invalid snapshot: $snap"; return 1; }
+    confirm_literal "Restore assistant-managed paths and recorded service states from $(basename "$snap")?" "RESTORE" || return 0
+
+    while IFS=$'\t' read -r state path; do
+        [[ -n "$path" ]] || continue
+        rel="${path#/}"
+        src="$snap/rootfs/$rel"
+        case "$state" in
+            PRESENT)
+                [[ -e "$src" || -L "$src" ]] || { msg_warn "Backup payload missing: $path"; continue; }
+                rm -rf -- "$path"
+                mkdir -p "$(dirname "$path")"
+                cp -a -- "$src" "$path" || msg_warn "Failed restoring $path"
+                ;;
+            ABSENT) rm -rf -- "$path" 2>/dev/null || true ;;
+        esac
+    done <"$manifest"
+
+    if [[ -f "$snap/networkmanager-dns.env" ]] && command_exists nmcli; then
+        # Root-owned file generated with printf %q by this assistant.
+        # shellcheck disable=SC1090
+        source "$snap/networkmanager-dns.env"
+        if [[ -n "${NM_UUID:-}" ]]; then
+            msg_warn "Restoring NetworkManager DNS for connection ${NM_UUID}. This can briefly interrupt connectivity."
+            nmcli connection modify "$NM_UUID" \
+                ipv4.ignore-auto-dns "${NM_V4_IGNORE:-no}" ipv4.dns "${NM_V4_DNS:-}" \
+                ipv6.ignore-auto-dns "${NM_V6_IGNORE:-no}" ipv6.dns "${NM_V6_DNS:-}" || true
+            nmcli connection up "$NM_UUID" >/dev/null 2>&1 || true
+        fi
+    fi
+
+    if [[ -f "$services" ]]; then
+        while IFS=$'\t' read -r unit enabled active; do
+            service_exists "$unit" || continue
+            case "$enabled" in
+                enabled|enabled-runtime|linked|linked-runtime) systemctl enable "$unit" >/dev/null 2>&1 || true ;;
+                disabled|not-found) systemctl disable "$unit" >/dev/null 2>&1 || true ;;
+            esac
+            case "$active" in
+                active|activating) systemctl start "$unit" >/dev/null 2>&1 || true ;;
+                inactive|failed|deactivating|not-found) systemctl stop "$unit" >/dev/null 2>&1 || true ;;
+            esac
+        done <"$services"
+    fi
+
+    systemctl daemon-reload >/dev/null 2>&1 || true
+    sysctl --system >/dev/null 2>&1 || true
+    for unit in ssh.service sshd.service fail2ban.service firewalld.service nftables.service systemd-resolved.service; do
+        systemctl try-reload-or-restart "$unit" >/dev/null 2>&1 || true
+    done
+    msg_success "Snapshot restoration completed. Review networking and authentication before closing the recovery session."
+}
+
+restore_snapshot_menu() {
+    local -a snaps=() ; local d choice
+    while IFS= read -r d; do snaps+=("$d"); done < <(find "$HARDENING_ROOT" -mindepth 1 -maxdepth 1 -type d -printf '%p\n' 2>/dev/null | sort -r)
+    ((${#snaps[@]})) || { msg_warn "No hardening snapshots are available."; return 0; }
+    ui_has_tty || { msg_error "Snapshot selection requires /dev/tty."; return 1; }
+
+    printf '\nAvailable snapshots:\n'
+    local i
+    for i in "${!snaps[@]}"; do
+        printf '  [%d] %s\n' "$((i+1))" "$(basename "${snaps[$i]}")"
+    done
+    choice="$(ask 'Snapshot number' '1')" || return 1
+    [[ "$choice" =~ ^[0-9]+$ ]] && (( choice >= 1 && choice <= ${#snaps[@]} )) || { msg_warn "Invalid snapshot selection."; return 1; }
+    restore_snapshot_dir "${snaps[$((choice-1))]}"
+}
+
+security_audit() {
+    ui_header "SECURITY POSTURE" "Read-only workstation assessment"
+    printf '  %-27s %s\n' "Kernel" "$(uname -r)"
+    printf '  %-27s %s\n' "Distribution" "$OS_PRETTY"
+    printf '  %-27s %s\n' "Package manager" "$DISTRO_PACKAGE_MANAGER"
+    printf '  %-27s %s\n' "Secure Boot" "$(command_exists mokutil && mokutil --sb-state 2>/dev/null | head -n1 || printf unknown)"
+    printf '  %-27s %s\n' "SELinux" "$(command_exists getenforce && getenforce 2>/dev/null || printf unavailable)"
+    printf '  %-27s %s\n' "AppArmor" "$(command_exists aa-status && aa-status --enabled >/dev/null 2>&1 && printf enabled || printf unavailable/not-enabled)"
+    printf '  %-27s %s\n' "UFW" "$(command_exists ufw && ufw status 2>/dev/null | head -n1 || printf unavailable)"
+    printf '  %-27s %s\n' "firewalld" "$(systemctl is-active firewalld.service 2>/dev/null || printf inactive/unavailable)"
+    printf '  %-27s %s\n' "nftables service" "$(systemctl is-active nftables.service 2>/dev/null || printf inactive/unavailable)"
+    printf '  %-27s %s\n' "Fail2Ban" "$(systemctl is-active fail2ban.service 2>/dev/null || printf inactive/unavailable)"
+    printf '  %-27s %s\n' "SSH server" "$(command_exists sshd && printf installed || printf absent)"
+    printf '\nKernel controls:\n'
+    printf '  %-27s %s\n' "kptr_restrict" "$(sysctl -n kernel.kptr_restrict 2>/dev/null || printf unavailable)"
+    printf '  %-27s %s\n' "dmesg_restrict" "$(sysctl -n kernel.dmesg_restrict 2>/dev/null || printf unavailable)"
+    printf '  %-27s %s\n' "ptrace_scope" "$(sysctl -n kernel.yama.ptrace_scope 2>/dev/null || printf unavailable)"
+    printf '  %-27s %s\n' "unprivileged_bpf" "$(sysctl -n kernel.unprivileged_bpf_disabled 2>/dev/null || printf unavailable)"
+    printf '\nListening sockets:\n'
+    ss -lntup 2>/dev/null || ss -lntu 2>/dev/null || true
+    printf '\nFailed systemd units:\n'
+    systemctl --failed --no-pager 2>/dev/null || true
+}
+
+hardening_install_sysctl_template() {
+    local src="$1" dst="$2" tmp="" line="" key="" proc=""
+    [[ -f "$src" ]] || { msg_error "Sysctl template not found: $src"; return 1; }
+    hardening_backup_path "$dst" || return 1
+    tmp="$(mktemp)" || return 1
+
+    while IFS= read -r line || [[ -n "$line" ]]; do
+        if [[ "$line" =~ ^[[:space:]]*# || -z "${line//[[:space:]]/}" || "$line" != *"="* ]]; then
+            printf '%s\n' "$line" >>"$tmp"
+            continue
+        fi
+        key="${line%%=*}"
+        key="${key#${key%%[![:space:]]*}}"
+        key="${key%${key##*[![:space:]]}}"
+        proc="/proc/sys/${key//./\/}"
+        if [[ -e "$proc" ]]; then
+            printf '%s\n' "$line" >>"$tmp"
+        else
+            msg_skip "Kernel does not expose sysctl '$key'; omitted from persistent policy."
+        fi
+    done <"$src"
+
+    mkdir -p "$(dirname "$dst")"
+    cp "$tmp" "$dst"
+    rm -f "$tmp"
+    chmod 0644 "$dst"
+    sysctl -p "$dst"
+}
+
+apply_network_kernel_baseline() {
+    local src="$SCRIPT_DIR/hardening/network/99-hardening.conf" dst="/etc/sysctl.d/90-dotfiles-network-hardening.conf"
+    [[ -f "$src" ]] || { msg_error "Missing network sysctl template."; return 1; }
+    hardening_install_sysctl_template "$src" "$dst"
+}
+
+select_firewall_engine() {
+    if systemctl is-active --quiet firewalld.service 2>/dev/null; then printf firewalld; return; fi
+    if command_exists ufw && ufw status 2>/dev/null | grep -q '^Status: active'; then printf ufw; return; fi
+    if systemctl is-active --quiet nftables.service 2>/dev/null; then printf nftables; return; fi
+    if command_exists firewall-cmd; then printf firewalld; return; fi
+    if command_exists ufw; then printf ufw; return; fi
+    if command_exists nft; then printf nftables; return; fi
+    case "$OS_FAMILY" in
+        fedora|opensuse) printf firewalld ;;
+        *) printf nftables ;;
+    esac
 }
 
 configure_firewall() {
-    local package_manager="$1"
-    local fw_engine=""
+    local engine="${1:-}" module=""
+    [[ -n "$engine" ]] || engine="$(select_firewall_engine)"
+    msg_info "Selected firewall frontend: $engine"
 
-    msg_info "Detecting active firewall engine..."
-
-    if systemctl is-active --quiet ufw 2>/dev/null; then
-        fw_engine="ufw"
-    elif systemctl is-active --quiet firewalld 2>/dev/null; then
-        fw_engine="firewalld"
-    elif systemctl is-active --quiet nftables 2>/dev/null; then
-        fw_engine="nftables"
-    elif command_exists ufw; then
-        fw_engine="ufw"
-    elif command_exists firewall-cmd; then
-        fw_engine="firewalld"
-    elif command_exists nft; then
-        fw_engine="nftables"
-    fi
-
-    if [[ -z "$fw_engine" ]]; then
-        msg_warn "No firewall detected. Installing UFW as default firewall..."
-        case "$package_manager" in
-            apt)
-                apt update -qq && apt install -y ufw
-                ;;
-            pacman)
-                pacman -S --needed --noconfirm ufw
-                ;;
-            *)
-                msg_error "Cannot auto-install firewall: unsupported package manager '$package_manager'."
-                return 1
-                ;;
-        esac
-
-        fw_engine="ufw"
-    fi
-
-    msg_info "Selected firewall engine: ${cyanColour}${fw_engine}${endColour}"
-
-    # Asignación dinámica del servicio systemd según el motor detectado
-    local fw_service=""
-    case "$fw_engine" in
-        ufw)       fw_service="ufw.service" ;;
-        firewalld) fw_service="firewalld.service" ;;
-        nftables)  fw_service="nftables.service" ;;
-    esac
-
-    # Inserción en SYSTEM_SERVICES evitando duplicados
-    if [[ -n "$fw_service" ]]; then
-        if [[ ! " ${SYSTEM_SERVICES[*]:-} " =~ " ${fw_service} " ]]; then
-            SYSTEM_SERVICES+=("$fw_service")
-            msg_info "Added firewall service to systemd targets: ${cyanColour}${fw_service}${endColour}"
-        fi
-    fi
-
-    case "$fw_engine" in
+    case "$engine" in
         ufw)
-            if [[ -f "${UFW_RULES:-}" ]]; then
-                source "$UFW_RULES"
-            else
-                msg_error "UFW rules script not found at: ${UFW_RULES:-}"
-                return 1
-            fi
+            hardening_record_service ufw.service
+            command_exists ufw || install_packages ufw || return 1
+            module="$SCRIPT_DIR/hardening/network/ufw.sh"
             ;;
         firewalld)
-            if [[ -f "${FIREWALLD_RULES:-}" ]]; then
-                source "$FIREWALLD_RULES"
-            else
-                msg_error "firewalld rules script not found at: ${FIREWALLD_RULES:-}"
-                return 1
-            fi
+            hardening_record_service firewalld.service
+            command_exists firewall-cmd || install_packages firewalld || return 1
+            module="$SCRIPT_DIR/hardening/network/firewalld.sh"
             ;;
         nftables)
-            if [[ -f "${NFTABLES_RULES:-}" ]]; then
-                source "$NFTABLES_RULES"
-            else
-                msg_error "nftables rules script not found at: ${NFTABLES_RULES:-}"
-                return 1
-            fi
+            hardening_record_service nftables.service
+            command_exists nft || install_packages nftables || return 1
+            module="$SCRIPT_DIR/hardening/network/nftables.sh"
             ;;
+        *) msg_error "Unsupported firewall engine: $engine"; return 1 ;;
     esac
-
-    apply_kernel_network_hardening
+    # shellcheck disable=SC1090
+    source "$module" || return 1
+    "apply_${engine}_rules"
 }
 
-
-setup_quad9_dns() {
-    if [[ -f "${QUAD9_DNS:-}" ]]; then
-        msg_info "Loading Quad9 DNS module..."
-        if source "$QUAD9_DNS"; then
-            msg_success "Quad9 DNS module executed successfully."
-        else
-            msg_error "Failed to execute Quad9 DNS script at: $QUAD9_DNS"
-            return 1
-        fi
-    else
-        msg_warn "Quad9 DNS script not found at path: ${QUAD9_DNS:-}"
-    fi
+ssh_service_name() {
+    service_exists ssh.service && { printf ssh.service; return; }
+    service_exists sshd.service && { printf sshd.service; return; }
+    return 1
 }
 
+setup_ssh_hardening() {
+    command_exists sshd || { msg_skip "OpenSSH server is not installed; no server is added by hardening."; return 0; }
+    local service="" main="/etc/ssh/sshd_config" dir="/etc/ssh/sshd_config.d" drop=""
+    drop="$dir/90-dotfiles-hardening.conf"
+    service="$(ssh_service_name 2>/dev/null || true)"
+    [[ -f "$main" ]] || { msg_warn "sshd binary exists but $main is absent."; return 1; }
 
-setup_unattended_upgrades() {
-    local os_distro="$1"
-    local auto_upgrades_configuration_file="$CURRENT_DIR/debian/20auto-upgrades"
+    hardening_backup_path "$main" || return 1
+    hardening_backup_path "$drop" || return 1
+    [[ -n "$service" ]] && hardening_record_service "$service"
+    mkdir -p "$dir"
 
-    if [[ "$os_distro" != "debian" ]]; then
-        msg_warn "Unattended-upgrades is only supported on Debian/Ubuntu based systems. Skipping..."
-        return 0
+    if ! grep -Eq '^[[:space:]]*Include[[:space:]]+/etc/ssh/sshd_config\.d/\*\.conf' "$main"; then
+        local tmp="${main}.dotfiles.$$"
+        { printf 'Include /etc/ssh/sshd_config.d/*.conf\n'; cat "$main"; } >"$tmp"
+        chmod --reference="$main" "$tmp" 2>/dev/null || chmod 0600 "$tmp"
+        chown --reference="$main" "$tmp" 2>/dev/null || true
+        mv -f "$tmp" "$main"
     fi
 
-    if [[ ! -d "${APT_CONF_DIR:-}" ]]; then
-        msg_error "APT configuration directory not found: ${APT_CONF_DIR:-}"
+    cat >"$drop" <<'EOF_SSH'
+# Balanced SSH server hardening: avoids remote lockout and preserves forwarding use cases.
+PermitRootLogin prohibit-password
+MaxAuthTries 4
+LoginGraceTime 45
+ClientAliveInterval 300
+ClientAliveCountMax 2
+EOF_SSH
+    chmod 0600 "$drop"
+
+    if ! sshd -t; then
+        msg_error "sshd validation failed; restoring the pre-change SSH configuration."
+        hardening_restore_path_from_current_snapshot "$main" || true
+        hardening_restore_path_from_current_snapshot "$drop" || true
         return 1
     fi
+    [[ -n "$service" ]] && systemctl reload "$service" || true
+}
 
-    msg_info "Setting up automatic unattended security upgrades..."
-
-    apt update -qq && apt install -y unattended-upgrades apt-listchanges
-
-    if [[ -f "$auto_upgrades_configuration_file" ]]; then
-        local filename="${auto_upgrades_configuration_file##*/}"
-        cp "$auto_upgrades_configuration_file" "$APT_CONF_DIR"
-        chmod 644 "$APT_CONF_DIR/$filename"
-        msg_success "Applied unattended upgrades configuration file ($filename)."
+setup_ssh_key_only() {
+    command_exists sshd || { msg_skip "OpenSSH server not installed."; return 0; }
+    local auth="$TARGET_HOME/.ssh/authorized_keys" drop="/etc/ssh/sshd_config.d/91-dotfiles-key-only.conf" service=""
+    [[ -s "$auth" ]] || {
+        msg_error "Refusing key-only SSH: $auth is missing or empty for target user '$TARGET_USER'."
+        return 1
+    }
+    confirm_literal "Disable SSH password and keyboard-interactive authentication? Keep this recovery session open until a second key login succeeds." "KEY-ONLY" || return 0
+    hardening_backup_path "$drop" || return 1
+    cat >"$drop" <<'EOF_KEYONLY'
+PasswordAuthentication no
+KbdInteractiveAuthentication no
+AuthenticationMethods publickey
+EOF_KEYONLY
+    chmod 0600 "$drop"
+    if ! sshd -t; then
+        hardening_restore_path_from_current_snapshot "$drop" || true
+        return 1
     fi
-
-    DEBIAN_FRONTEND=noninteractive dpkg-reconfigure -f noninteractive unattended-upgrades
-    systemctl enable --now unattended-upgrades
-
-    msg_success "Unattended upgrades configured and service enabled successfully."
+    service="$(ssh_service_name 2>/dev/null || true)"
+    [[ -n "$service" ]] && { hardening_record_service "$service"; systemctl reload "$service" || return 1; }
+    msg_warn "Validate a new SSH login before closing the current session."
 }
 
 setup_fail2ban() {
-    local package_manager="$1"
-    local fail2ban_target_dir="/etc/fail2ban"
+    command_exists sshd || { msg_skip "No SSH server detected; SSH Fail2Ban jail is unnecessary."; return 0; }
+    hardening_record_service fail2ban.service
+    install_packages fail2ban || return 1
+    hardening_backup_path /etc/fail2ban/jail.local || return 1
+    hardening_backup_path /etc/fail2ban/jail.d/90-dotfiles-sshd.local || return 1
+    hardening_record_service fail2ban.service
+    mkdir -p /etc/fail2ban/jail.d
+    cp "$SCRIPT_DIR/hardening/fail2ban/jail.local" /etc/fail2ban/jail.local
+    cp "$SCRIPT_DIR/hardening/fail2ban/ssh.local" /etc/fail2ban/jail.d/90-dotfiles-sshd.local
+    chmod 0644 /etc/fail2ban/jail.local /etc/fail2ban/jail.d/90-dotfiles-sshd.local
+    fail2ban-client -t || return 1
+    systemctl enable --now fail2ban.service || return 1
+    fail2ban-client status sshd 2>/dev/null || true
+}
 
-    case "$package_manager" in
-        apt)
-            msg_info "Installing Fail2ban via APT..."
-            apt update -qq && apt install -y fail2ban
+setup_automatic_security_updates() {
+    case "$OS_FAMILY" in
+        debian)
+            hardening_record_service apt-daily.timer
+            hardening_record_service apt-daily-upgrade.timer
+            install_packages unattended-upgrades || return 1
+            local dst="/etc/apt/apt.conf.d/20auto-upgrades"
+            hardening_backup_path "$dst" || return 1
+            cp "$SCRIPT_DIR/hardening/debian/20auto-upgrades" "$dst"
+            chmod 0644 "$dst"
+            service_exists apt-daily.timer && systemctl enable --now apt-daily.timer >/dev/null 2>&1 || true
+            service_exists apt-daily-upgrade.timer && systemctl enable --now apt-daily-upgrade.timer >/dev/null 2>&1 || true
             ;;
-        pacman)
-            msg_info "Installing Fail2ban via Pacman..."
-            pacman -S --needed --noconfirm fail2ban
+        fedora)
+            local pkg="" timer="" cfg="/etc/dnf/automatic.conf"
+            hardening_record_service dnf5-automatic.timer
+            hardening_record_service dnf-automatic.timer
+            pkg_refresh_once || true
+            if pkg_available dnf5-plugins; then pkg="dnf5-plugins"; else pkg="dnf-automatic"; fi
+            install_packages "$pkg" || return 1
+            if service_exists dnf5-automatic.timer; then timer="dnf5-automatic.timer"; else timer="dnf-automatic.timer"; fi
+            service_exists "$timer" || { msg_warn "No DNF automatic timer found after package installation."; return 1; }
+            hardening_backup_path "$cfg" || return 1
+            hardening_record_service "$timer"
+            mkdir -p /etc/dnf
+            cat >"$cfg" <<'EOF_DNF'
+[commands]
+upgrade_type = security
+download_updates = yes
+apply_updates = yes
+random_sleep = 900
+reboot = never
+
+[emitters]
+emit_via = stdio
+EOF_DNF
+            systemctl enable --now "$timer"
             ;;
-        *)
-            msg_error "Could not install Fail2ban: unsupported package manager '$package_manager'."
-            return 1
+        opensuse)
+            msg_warn "Automatic patch policy differs between Leap and Tumbleweed; no generic unattended policy is imposed."
+            msg_info "Use the distribution's YaST Online Update policy on Leap; keep Tumbleweed snapshot upgrades deliberate."
+            return 0
+            ;;
+        arch)
+            msg_warn "Automatic unattended upgrades are intentionally not enabled on rolling-release Arch systems."
+            return 0
             ;;
     esac
-
-    msg_info "Deploying custom Fail2ban jail configurations..."
-    mkdir -p "${fail2ban_target_dir}/jail.d"
-
-    if [[ -f "${FAIL2BAN_CONF_DIR}/jail.local" ]]; then
-        cp "${FAIL2BAN_CONF_DIR}/jail.local" "${fail2ban_target_dir}/jail.local"
-        chmod 644 "${fail2ban_target_dir}/jail.local"
-        msg_success "Deployed jail.local to ${fail2ban_target_dir}/jail.local (644)."
-    else
-        msg_warn "Source file ${FAIL2BAN_CONF_DIR}/jail.local not found."
-    fi
-
-    if [[ -f "${FAIL2BAN_CONF_DIR}/ssh.local" ]]; then
-        cp "${FAIL2BAN_CONF_DIR}/ssh.local" "${fail2ban_target_dir}/jail.d/ssh.local"
-        chmod 644 "${fail2ban_target_dir}/jail.d/ssh.local"
-        msg_success "Deployed ssh.local to ${fail2ban_target_dir}/jail.d/ssh.local (644)."
-    else
-        msg_warn "Source file ${FAIL2BAN_CONF_DIR}/ssh.local not found."
-    fi
-
-    msg_info "Enabling and starting Fail2ban service..."
-    systemctl enable --now fail2ban
-    systemctl restart fail2ban
-
-    msg_success "Fail2ban setup completed successfully."
 }
 
-apply_hardware_hardening() {
-    local package_manager="$1"
-
-    if [[ -f "${HARDWARE_HARDENING_RULES:-}" ]]; then
-        msg_info "Applying process limits, memory protection, and kernel hardening..."
-        source "$HARDWARE_HARDENING_RULES"
-        apply_process_memory_hardening "$package_manager"
-    else
-        msg_warn "Hardware hardening script not found at: ${HARDWARE_HARDENING_RULES:-}"
-    fi
+setup_dns_security() {
+    # shellcheck source=hardening/network/quad9_dns.sh
+    source "$SCRIPT_DIR/hardening/network/quad9_dns.sh" || return 1
+    configure_quad9_dns
 }
 
-select_timezone() {
-    msg_info "Configuring system timezone..."
-
-    if ! command_exists timedatectl; then
-        msg_warn "timedatectl is not available. Skipping timezone configuration."
-        return 0
-    fi
-    
-    if [[ ! -t 0 ]]; then
-        msg_info "Non-interactive session detected. Skipping interactive timezone selection."
-        return 0
-    fi
-
-    echo ""
-    echo "=========================================="
-    echo "           TIMEZONE SELECTION             "
-    echo "=========================================="
-
-    local regions=("Africa" "America" "Asia" "Atlantic" "Australia" "Europe" "Indian" "Pacific" "UTC" "Skip")
-    local selected_region=""
-
-    PS3="Select a region [1-${#regions[@]}]: "
-    select reg in "${regions[@]}"; do
-        if [[ -n "${reg:-}" ]]; then
-            if [[ "$reg" == "Skip" ]]; then
-                msg_info "Timezone selection skipped by user."
-                return 0
-            fi
-            if [[ "$reg" == "UTC" ]]; then
-                selected_region="UTC"
-                break
-            fi
-            selected_region="$reg"
-            break
-        else
-            msg_warn "Invalid option. Please select a valid number."
-        fi
-    done
-
-    local selected_tz=""
-    if [[ "$selected_region" == "UTC" ]]; then
-        selected_tz="UTC"
-    else
-        echo ""
-        msg_info "Loading timezones for region: $selected_region..."
-
-        mapfile -t tzs < <(timedatectl list-timezones | grep "^${selected_region}/")
-        tzs+=("Cancel")
-
-        PS3="Select a timezone [1-${#tzs[@]}]: "
-        select tz in "${tzs[@]}"; do
-            if [[ -n "${tz:-}" ]]; then
-                if [[ "$tz" == "Cancel" ]]; then
-                    msg_info "Timezone selection cancelled."
-                    return 0
-                fi
-                selected_tz="$tz"
-                break
-            else
-                msg_warn "Invalid option. Please select a valid number."
-            fi
-        done
-    fi
-
-    if [[ -n "$selected_tz" ]]; then
-        timedatectl set-timezone "$selected_tz"
-        msg_success "System timezone updated to: $selected_tz"
-    fi
+apply_kernel_memory_baseline() {
+    # shellcheck source=hardening/hardware/memory_hardening.sh
+    source "$SCRIPT_DIR/hardening/hardware/memory_hardening.sh" || return 1
+    apply_process_memory_hardening
 }
 
-setup_chrony() {
-    local package_manager="$1"
-    local service_name=""
-
-    msg_info "Setting up Chrony time synchronization daemon..."
-
-    case "$package_manager" in
-        apt)
-            apt update -qq && apt install -y chrony
-            service_name="chrony"
-            ;;
-        pacman)
-            pacman -S --needed --noconfirm chrony
-            service_name="chronyd"
-            ;;
-        *)
-            msg_error "Could not install Chrony: unsupported package manager '$package_manager'."
-            return 1
-            ;;
-    esac
-
-    select_timezone
-
-    msg_info "Enabling and starting Chrony service ($service_name)..."
-    systemctl enable --now "$service_name"
-    timedatectl set-ntp true 2>/dev/null || true
-
-    msg_success "Chrony time synchronization configured successfully."
+strict_shared_memory_wrapper() {
+    source "$SCRIPT_DIR/hardening/hardware/memory_hardening.sh" || return 1
+    strict_shared_memory
 }
 
-setup_apparmor() {
-    local package_manager="$1"
-
-    msg_info "Setting up and hardening AppArmor Mandatory Access Control..."
-
-    case "$package_manager" in
-        apt)
-            msg_info "Installing AppArmor core, utilities, and extended profiles via APT..."
-            apt update -qq
-            apt install -y apparmor apparmor-utils apparmor-profiles apparmor-profiles-extra
-            ;;
-        pacman)
-            msg_info "Installing AppArmor via Pacman..."
-            pacman -S --needed --noconfirm apparmor
-            ;;
-        *)
-            msg_error "Could not setup AppArmor: unsupported package manager '$package_manager'."
-            return 1
-            ;;
-    esac
-
-    local parser_conf="/etc/apparmor/parser.conf"
-
-    if [[ -f "$parser_conf" ]]; then
-        if ! grep -qs "^write-cache" "$parser_conf"; then
-            echo "write-cache" >> "$parser_conf"
-            msg_info "Enabled binary profile caching in $parser_conf."
-        fi
-        if ! grep -qs "^optimize=compress-fast" "$parser_conf"; then
-            echo "optimize=compress-fast" >> "$parser_conf"
-        fi
-    fi
-
-    msg_info "Enabling and starting AppArmor systemd service..."
-    systemctl enable --now apparmor
-
-    local aa_active=false
-    if [[ -f /sys/module/apparmor/parameters/enabled ]]; then
-        if [[ $(cat /sys/module/apparmor/parameters/enabled) == "Y" ]]; then
-            aa_active=true
-        fi
-    fi
-
-    if [[ "$aa_active" == true ]]; then
-        msg_success "AppArmor kernel module is active."
-    else
-        msg_warn "AppArmor is NOT active in the running kernel."
-
-        if [[ -f /etc/default/grub ]]; then
-            msg_info "GRUB configuration detected at /etc/default/grub. Checking boot parameters..."
-
-            if ! grep -q "apparmor=1" /etc/default/grub; then
-                msg_info "Adding AppArmor parameters to GRUB_CMDLINE_LINUX_DEFAULT..."
-
-                cp /etc/default/grub /etc/default/grub.bak.$(date +%F_%T)
-
-                sed -i -E 's/GRUB_CMDLINE_LINUX_DEFAULT="(.*)"/GRUB_CMDLINE_LINUX_DEFAULT="\1 apparmor=1 lsm=landlock,lockdown,yama,integrity,apparmor"/' /etc/default/grub
-
-                msg_info "Updating GRUB configuration..."
-                if command_exists update-grub; then
-                    update-grub
-                elif command_exists grub-mkconfig; then
-                    grub-mkconfig -o /boot/grub/grub.cfg
-                fi
-
-                msg_warn "GRUB updated. A SYSTEM REBOOT IS REQUIRED to activate AppArmor in the kernel."
-            else
-                msg_info "AppArmor parameters already present in /etc/default/grub. Pending reboot."
-            fi
-
-        elif command_exists bootctl && bootctl status &>/dev/null; then
-            msg_warn "systemd-boot detected. Please add options manually to your boot entry."
-        else
-            msg_warn "Manual intervention required for bootloader kernel options."
-        fi
-    fi
-
-    if command_exists aa-enforce; then
-        msg_info "Setting all profiles in /etc/apparmor.d/ to enforce mode..."
-        aa-enforce /etc/apparmor.d/* 2>/dev/null || true
-        msg_success "AppArmor profiles set to enforce mode."
-    fi
-
-    if command_exists aa-status; then
-        print_separator
-        msg_info "Current AppArmor Status Summary:"
-        aa-status --short 2>/dev/null || aa-status 2>/dev/null | head -n 10
-    fi
-
-    msg_success "AppArmor configuration completed successfully."
+strict_module_blacklist_wrapper() {
+    source "$SCRIPT_DIR/hardening/hardware/memory_hardening.sh" || return 1
+    strict_module_blacklist
 }
 
-
-setup_ssh_hardening() {
-    local package_manager="$1"
-    local main_sshd_conf="/etc/ssh/sshd_config"
-    local sshd_conf_dir="/etc/ssh/sshd_config.d"
-    local hardening_file="${sshd_conf_dir}/99-hardening.conf"
-
-    msg_info "Verifying OpenSSH server installation..."
-
-    case "$package_manager" in
-        apt)
-            if ! dpkg -l | grep -q "^ii  openssh-server"; then
-                msg_info "Installing openssh-server via APT..."
-                apt update -qq && apt install -y openssh-server
-            fi
-            ;;
-        pacman)
-            if ! pacman -Qs "^openssh$" &>/dev/null; then
-                msg_info "Installing openssh via Pacman..."
-                pacman -S --needed --noconfirm openssh
-            fi
-            ;;
-        *)
-            msg_error "Could not setup SSH: unsupported package manager '$package_manager'."
-            return 1
-            ;;
-    esac
-
-    if [[ ! -f "$main_sshd_conf" ]]; then
-        msg_error "Main SSH configuration file ($main_sshd_conf) not found."
-        return 1
-    fi
-
-    mkdir -p "$sshd_conf_dir"
-    
-    if ! grep -qs -F "Include /etc/ssh/sshd_config.d/*.conf" "$main_sshd_conf"; then
-        sed -i '1i Include /etc/ssh/sshd_config.d/*.conf' "$main_sshd_conf"
-    fi
-
-    msg_info "Deploying hardened SSH profile to $hardening_file..."
-    cat << 'EOF' > "$hardening_file"
-# Security Hardening - Production Profile
-PermitRootLogin no
-PasswordAuthentication no
-ChallengeResponseAuthentication no
-KbdInteractiveAuthentication no
-MaxAuthTries 3
-X11Forwarding no
-AllowAgentForwarding no
-ClientAliveInterval 300
-ClientAliveCountMax 2
-EOF
-    chmod 600 "$hardening_file"
-
-    msg_info "Validating SSH daemon configuration syntax..."
-    ssh-keygen -A &>/dev/null
-    mkdir -p /run/sshd
-
-    # Disable active X11Forwarding in the main file to satisfy static security scanners
-    if grep -qs -i "^[[:space:]]*X11Forwarding[[:space:]]\+yes" "$main_sshd_conf"; then
-        msg_info "Commenting out legacy X11Forwarding in $main_sshd_conf to prevent static audit false positives..."
-        sed -i -E 's/^([[:space:]]*X11Forwarding[[:space:]]+yes)/# \1 # Disabled by hardening suite/gi' "$main_sshd_conf"
-    fi
-
-    if sshd -t; then
-        msg_success "SSH configuration syntax is valid."
-
-        local ssh_service="sshd"
-        if systemctl list-unit-files | grep -q "^ssh\.service"; then
-            ssh_service="ssh"
-        fi
-
-        msg_info "Enabling and reloading $ssh_service service..."
-        systemctl enable "$ssh_service" &>/dev/null
-        
-        if systemctl reload "$ssh_service" &>/dev/null || systemctl restart "$ssh_service" &>/dev/null; then
-            msg_success "SSH daemon successfully reloaded with hardened rules."
-        else
-            msg_error "Failed to reload or restart $ssh_service service."
-            return 1
-        fi
-    else
-        msg_error "SSH configuration validation failed. Removing deployed rules..."
-        rm -f "$hardening_file"
-        return 1
-    fi
+mac_time_service_audit() {
+    printf 'SELinux      : %s\n' "$(command_exists getenforce && getenforce 2>/dev/null || printf unavailable)"
+    printf 'AppArmor     : %s\n' "$(command_exists aa-status && aa-status --enabled >/dev/null 2>&1 && printf enabled || printf unavailable/not-enabled)"
+    printf 'Time sync    : %s\n' "$(timedatectl show -p NTPSynchronized --value 2>/dev/null || printf unknown)"
+    printf 'Time service : %s\n' "$(timedatectl show -p NTP --value 2>/dev/null || printf unknown)"
+    printf '\nEnabled network-facing services (best effort):\n'
+    systemctl list-unit-files --state=enabled --type=service --no-pager 2>/dev/null |
+        grep -Ei 'ssh|http|apache|nginx|samba|smb|nfs|rpc|avahi|cups|docker|podman|libvirt|vnc|rdp' || true
+    msg_info "No MAC profile or desktop service is forcibly disabled by this audit."
 }
 
-disable_unused_services() {
-    msg_info "Disabling unnecessary background services for server environments..."
-
-    local services=(
-        "bluetooth.service"
-        "cups.service"
-        "cups-browsed.service"
-        "avahi-daemon.service"
-        "ModemManager.service"
-        "apport.service"
-        "whoopsie.service"
-        "speech-dispatcher.service"
-        "geoclue.service"
-    )
-
-    local disabled_count=0
-
-    for svc in "${services[@]}"; do
-        if systemctl list-unit-files "$svc" 2>/dev/null | grep -q "^$svc"; then
-            if systemctl is-enabled --quiet "$svc" 2>/dev/null || systemctl is-active --quiet "$svc" 2>/dev/null; then
-                msg_info "Disabling and stopping $svc..."
-                systemctl disable --now "$svc" &>/dev/null || true
-                msg_success "Disabled: $svc"
-                ((++disabled_count))
-            else
-                msg_info "Service $svc is already disabled or inactive."
-            fi
-        fi
-    done
-
-    if systemctl list-unit-files "rpcbind.service" 2>/dev/null | grep -q "^rpcbind.service"; then
-        if ! systemctl is-active --quiet nfs-server 2>/dev/null && ! grep -qs "nfs" /proc/mounts; then
-            if systemctl is-enabled --quiet rpcbind.service 2>/dev/null || systemctl is-active --quiet rpcbind.service 2>/dev/null; then
-                msg_info "Disabling rpcbind.service (NFS not in use)..."
-                systemctl disable --now rpcbind.service rpcbind.socket &>/dev/null || true
-                msg_success "Disabled: rpcbind.service & rpcbind.socket"
-                ((++disabled_count))
-            fi
-        fi
-    fi
-
-    if [[ $disabled_count -eq 0 ]]; then
-        msg_info "No active unnecessary services needed disabling."
-    else
-        msg_success "Successfully disabled $disabled_count unnecessary services."
-    fi
-}
-
-setup_secure_mounts() {
-    msg_info "Applying secure mount options (nodev, nosuid, noexec) to /dev/shm..."
-
-    if mountpoint -q /dev/shm; then
-        mount -o remount,nodev,nosuid,noexec /dev/shm 2>/dev/null || true
-        msg_info "Remounted /dev/shm with nodev,nosuid,noexec."
-    fi
-
-    if ! grep -qs "/dev/shm" /etc/fstab; then
-        msg_info "Adding persistent /dev/shm security entry to /etc/fstab..."
-        echo "tmpfs /dev/shm tmpfs defaults,nodev,nosuid,noexec 0 0" >> /etc/fstab
-    fi
-
-    msg_success "Secure mount options applied successfully to /dev/shm."
-}
-
-setup_umask() {
-    msg_info "Configuring default system-wide umask to 027 (restrictive read/write)..."
-
-    if [[ -f /etc/login.defs ]]; then
-        sed -i -E 's/^UMASK\s+[0-9]+/UMASK 027/' /etc/login.defs
-        msg_info "Updated UMASK to 027 in /etc/login.defs."
-    fi
-
-    mkdir -p /etc/profile.d
-    cat << 'EOF' > /etc/profile.d/umask.sh
-# Set restrictive default umask for users (027)
-umask 027
-EOF
-    chmod 644 /etc/profile.d/umask.sh
-
-    msg_success "Global umask 027 applied to /etc/profile.d/umask.sh."
+install_threat_tools() {
+    source "$SCRIPT_DIR/hardening/antivirus/antivirus.sh" || return 1
+    setup_threat_protection
 }
 
 setup_usbguard() {
-    local package_manager="$1"
+    msg_warn "USBGuard can block new keyboards, storage devices and phones until explicitly authorized."
+    confirm_literal "Install USBGuard and whitelist devices currently connected?" "ENABLE-USBGUARD" || return 0
+    hardening_record_service usbguard.service
+    install_packages usbguard || return 1
+    command_exists usbguard || return 1
+    hardening_backup_path /etc/usbguard/rules.conf || return 1
+    hardening_record_service usbguard.service
+    mkdir -p /etc/usbguard
+    usbguard generate-policy > /etc/usbguard/rules.conf || return 1
+    chmod 0600 /etc/usbguard/rules.conf
+    systemctl enable --now usbguard.service || return 1
+}
 
-    msg_info "Evaluating environment type for USBGuard deployment..."
+profile_recommended() {
+    run_task "Security posture audit" security_audit
+    run_task "Balanced network sysctl" apply_network_kernel_baseline
+    run_task "Balanced kernel memory baseline" apply_kernel_memory_baseline
+    run_task "Host firewall baseline" configure_firewall
+    run_task "Existing SSH server baseline" setup_ssh_hardening
+    run_task "Automatic security updates" setup_automatic_security_updates
+    run_task "SSH brute-force protection" setup_fail2ban
+    run_task "MAC, time and service exposure audit" mac_time_service_audit
+}
 
-    if ! is_server_environment; then
-        print_separator
-        msg_warn "DESKTOP ENVIRONMENT DETECTED!"
-        msg_warn "USBGuard enforces a strict whitelist policy."
-        msg_warn "On desktops, plugging in new USB drives, keyboards, or mice WILL BE BLOCKED by default."
-        print_separator
-        read -e -i "N" -rp "Do you still want to proceed with USBGuard on this desktop system? [y/N]: " confirm_desktop
-        
-        confirm_desktop="${confirm_desktop:-N}"
-        
-        if [[ ! "$confirm_desktop" =~ ^[Yy]$ ]]; then
-            msg_info "USBGuard installation skipped by user for desktop environment."
-            return 0
-        fi
-    else
-        msg_info "Server/headless environment verified. Proceeding with USBGuard deployment..."
-    fi
+profile_all() {
+    profile_recommended
+    run_task "Key-only SSH policy" setup_ssh_key_only
+    run_task "Quad9 DNS policy" setup_dns_security
+    run_task "Threat protection tools" install_threat_tools
+    run_task "USBGuard" setup_usbguard
+    run_task "Strict /dev/shm policy" strict_shared_memory_wrapper
+    run_task "Strict kernel module blacklist" strict_module_blacklist_wrapper
+}
 
-    case "$package_manager" in
-        apt)
-            apt update -qq && apt install -y usbguard
-            ;;
-        pacman)
-            pacman -S --needed --noconfirm usbguard
-            ;;
-        *)
-            msg_error "Could not install USBGuard: unsupported package manager '$package_manager'."
-            return 1
-            ;;
+execute_option() {
+    case "${1,,}" in
+        1|audit) security_audit ;;
+        2|recommended|baseline) profile_recommended ;;
+        3|network|sysctl) run_task "Balanced network sysctl" apply_network_kernel_baseline ;;
+        4|kernel|memory) run_task "Balanced kernel memory baseline" apply_kernel_memory_baseline ;;
+        5|firewall) run_task "Host firewall baseline" configure_firewall ;;
+        6|ssh) run_task "Existing SSH server baseline" setup_ssh_hardening ;;
+        7|key-only|keyonly) run_task "Key-only SSH policy" setup_ssh_key_only ;;
+        8|updates) run_task "Automatic security updates" setup_automatic_security_updates ;;
+        9|fail2ban) run_task "SSH brute-force protection" setup_fail2ban ;;
+        10|dns|quad9) run_task "Quad9 DNS policy" setup_dns_security ;;
+        11|exposure|mac) run_task "MAC, time and service exposure audit" mac_time_service_audit ;;
+        12|threat|antivirus) run_task "Threat protection tools" install_threat_tools ;;
+        13|usb|usbguard) run_task "USBGuard" setup_usbguard ;;
+        14|shm) run_task "Strict /dev/shm policy" strict_shared_memory_wrapper ;;
+        15|blacklist) run_task "Strict kernel module blacklist" strict_module_blacklist_wrapper ;;
+        16|restore) restore_snapshot_menu ;;
+        17|all|full) profile_all ;;
+        0|q|quit|exit) return 20 ;;
+        *) msg_warn "Unknown hardening selection: $1" ;;
     esac
-
-    msg_info "Generating initial policy based on currently connected USB devices..."
-    usbguard generate-policy > /etc/usbguard/rules.conf 2>/dev/null || true
-    chmod 600 /etc/usbguard/rules.conf
-
-    msg_info "Enabling and starting USBGuard service..."
-    systemctl enable --now usbguard
-
-    msg_success "USBGuard configured and active."
-}
-install_antivirus() {
-    local package_manager="$1"
-
-    if [[ -n "${ANTIVIRUS_SETUP:-}" && -f "$ANTIVIRUS_SETUP" ]]; then
-        msg_info "Loading antivirus module..."
-        if source "$ANTIVIRUS_SETUP"; then
-            setup_threat_protection "$package_manager"
-        else
-            msg_error "Failed to source antivirus setup script at: $ANTIVIRUS_SETUP"
-            return 1
-        fi
-    else
-        msg_warn "Antivirus installation script not found at: ${ANTIVIRUS_SETUP:-}"
-    fi
+    return 0
 }
 
-run_all_tasks() {
-    local package_manager="$1"
-    local os_distribution="$2"
-
-    update_system "$package_manager" || msg_warn "System update finished with warnings."
-    print_separator
-
-    install_essentials "$package_manager" || msg_warn "Essential tools installation encountered issues."
-    print_separator
-
-    setup_chrony "$package_manager" || msg_warn "Chrony setup encountered issues."
-    print_separator
-
-    setup_unattended_upgrades "$os_distribution" || msg_warn "Unattended upgrades setup skipped or failed."
-    print_separator
-
-    setup_fail2ban "$package_manager" || msg_warn "Fail2ban setup encountered issues."
-    print_separator
-
-    configure_firewall "$package_manager" || msg_warn "Firewall rules application skipped or failed."
-    print_separator
-
-    setup_quad9_dns || msg_warn "Quad9 DNS setup encountered issues."
-    print_separator
-
-    apply_hardware_hardening "$package_manager" || msg_warn "Hardware hardening skipped or failed."
-    print_separator
-
-    setup_secure_mounts || msg_warn "Secure mounts configuration encountered issues."
-    print_separator
-
-    setup_umask || msg_warn "Umask adjustment encountered issues."
-    print_separator
-
-    setup_ssh_hardening "$package_manager" || msg_warn "SSH hardening failed or was reverted."
-    print_separator
-
-    disable_unused_services || msg_warn "Unused services task completed with warnings."
-    print_separator
-
-    setup_apparmor "$package_manager" || msg_warn "AppArmor setup completed with warnings."
-    print_separator
-
-    install_antivirus "$package_manager" || msg_warn "Antivirus installation encountered issues."    
-    print_separator
-
-    setup_usbguard "$package_manager" || msg_warn "USBGuard setup encountered issues."
-    print_separator
-
-    msg_success "Full hardening pipeline completed successfully."
-}
-show_interactive_menu() {
-    local package_manager="$1"
-    local os_distribution="$2"
-
-    if [[ ! -t 0 ]]; then
-        msg_error "Interactive menu requires a TTY terminal. Use '--all' for unattended mode."
-        exit 1
-    fi
-
-    execute_option() {
-        local opt="$1"
-        local opt_lower="${opt,,}" # Convierte la entrada a minúsculas
-
-        case "$opt_lower" in
-            1)  run_all_tasks "$package_manager" "$os_distribution" ;;
-            2)  update_system "$package_manager" ;;
-            3)  install_essentials "$package_manager" ;;
-            4)  setup_chrony "$package_manager" ;;
-            5)  setup_unattended_upgrades "$os_distribution" ;;
-            6)  setup_fail2ban "$package_manager" ;;
-            7)  configure_firewall "$package_manager" ;;
-            8)  setup_quad9_dns ;;
-            9)  apply_hardware_hardening "$package_manager" ;;
-            10) setup_secure_mounts ;;
-            11) setup_umask ;;
-            12) setup_usbguard "$package_manager" ;;
-            13) setup_ssh_hardening "$package_manager" ;;
-            14) disable_unused_services ;;
-            15) setup_apparmor "$package_manager" ;;
-            16) install_antivirus "$package_manager" ;;
-            17) restore_backup ;;
-            18|exit|out|stop|close|q|quit)
-                msg_info "Exiting setup suite."
-                exit 0
-                ;;
-            *)
-                msg_warn "Invalid option '$opt'. Skipping."
-                ;;
-        esac
-    }
-
+interactive_menu() {
+    ui_has_tty || { msg_error "Interactive mode requires /dev/tty. Use --audit/--recommended/--all."; return 1; }
     while true; do
-        clear
-        print_banner "$os_distribution" "$package_manager"
+        ui_header "SYSTEM HARDENING" "Balanced defaults first; strict compatibility-impacting controls are explicit"
+        ui_menu_item "1" "Security posture audit" "Read-only kernel, firewall, MAC, SSH, sockets and failed units"
+        ui_menu_item "2" "Recommended baseline" "Network/kernel + firewall + safe SSH + updates + Fail2Ban" "$C_GREEN"
+        ui_menu_item "3" "Network sysctl" "VPN/container-compatible protocol hardening"
+        ui_menu_item "4" "Kernel/memory sysctl" "Pointers, dmesg, ptrace, BPF and protected links"
+        ui_menu_item "5" "Firewall baseline" "Preserve existing rules; no inbound web ports are opened"
+        ui_menu_item "6" "SSH safe baseline" "Only if sshd already exists; no password lockout"
+        ui_menu_item "7" "SSH key-only" "High impact; requires authorized_keys and literal confirmation" "$C_YELLOW"
+        ui_menu_item "8" "Security updates" "Native distro policy where safely supportable"
+        ui_menu_item "9" "Fail2Ban SSH" "Small distro-neutral jail; only when sshd exists"
+        ui_menu_item "10" "Quad9 DNS" "Optional; split-DNS/VPN warning and explicit confirmation" "$C_YELLOW"
+        ui_menu_item "11" "MAC/time/exposure" "Read-only SELinux/AppArmor/time/service review"
+        ui_menu_item "12" "Threat tools" "ClamAV/Lynis/rootkit tools from official repos only"
+        ui_menu_item "13" "USBGuard" "High impact on desktop peripherals" "$C_RED"
+        ui_menu_item "14" "Strict /dev/shm" "noexec may break developer/desktop workloads" "$C_RED"
+        ui_menu_item "15" "Module blacklist" "Optional uncommon protocol reduction" "$C_RED"
+        ui_menu_item "16" "Restore snapshot" "Restore paths and service states recorded before changes" "$C_MAGENTA"
+        ui_menu_item "17" "All modules" "Runs all; high-impact controls still ask individually" "$C_YELLOW"
+        ui_menu_item "0" "Exit" "Leave hardening workspace" "$C_RED"
+        ui_rule
 
-        echo -e "${yellowColour}[MODULE SELECTION MENU]${endColour}"
-        echo -e " 1) ${greenColour}Full Deployment${endColour}      -> Execute all configuration modules sequentially"
-        echo -e " 2) ${cyanColour}System Update${endColour}        -> Repositories synchronization, full-upgrade & cache cleanup"
-        echo -e " 3) ${cyanColour}Essential Tools${endColour}      -> CLI diagnostics (btop, htop, iotop, jq, ripgrep, eza, etc.)"
-        echo -e " 4) ${cyanColour}Time Sync & TZ${endColour}       -> Chrony NTP daemon setup & interactive timezone selection"
-        echo -e " 5) ${cyanColour}Auto-Upgrades${endColour}        -> Unattended security updates (Debian/Ubuntu only)"
-        echo -e " 6) ${cyanColour}Fail2ban Service${endColour}     -> Bruteforce protection & custom SSH jail policies"
-        echo -e " 7) ${cyanColour}Firewall${endColour}             -> Firewall rules application & Network kernel hardening"
-        echo -e " 8) ${cyanColour}Quad9 DNS Setup${endColour}      -> Malware blocking, DNSSEC & DNS-over-TLS configuration"
-        echo -e " 9) ${cyanColour}Hardware & Memory${endColour}    -> Limits, coredumps, dmesg restriction, swappiness & /dev/shm"
-        echo -e "10) ${cyanColour}Secure Mounts${endColour}        -> Apply nodev,nosuid,noexec flags to /dev/shm & fstab"
-        echo -e "11) ${cyanColour}Default Umask${endColour}        -> Restrictive file creation permissions (umask 027)"
-        echo -e "12) ${cyanColour}USBGuard Service${endColour}     -> BadUSB protection ${redColour}[⚠️  WARN: May block new USBs]${endColour}"        
-        echo -e "13) ${cyanColour}SSH Hardening${endColour}        -> Disable root login, password auth & enforce key-based access"
-        echo -e "14) ${cyanColour}Unused Services${endColour}      -> Disable Bluetooth, CUPS, Avahi-daemon & ModemManager"
-        echo -e "15) ${cyanColour}AppArmor MAC${endColour}         -> Mandatory Access Control setup, caching & profile enforcement"        
-        echo -e "16) ${cyanColour}Threat Protection${endColour}    -> Prepare ClamAV, Lynis auditor, chkrootkit & ClamUI"        
-        
-        if [[ -n "${BACKUP_ARCHIVE:-}" && -f "$BACKUP_ARCHIVE" ]]; then
-            echo -e "17) ${purpleColour}Restore Backup${endColour}       -> ${greenColour}[Backup Available]${endColour} Revert system to initial state"
-        else
-            echo -e "17) ${purpleColour}Restore Backup${endColour}       -> ${grayColour}[No Backup Found]${endColour} Revert system to initial state"
-        fi
-
-        echo -e "18) ${redColour}Exit / Quit${endColour}          -> Terminate execution (exit, stop, close, q)"
-        print_separator
-
-        read -rp "Select option(s) [e.g. 5,7,9 or exit]: " user_input
-        print_separator
-
-        clean_input=$(echo "$user_input" | tr ',' ' ')
-
-        if [[ -z "$clean_input" ]]; then
-            continue
-        fi
-
-        for choice in $clean_input; do
-            execute_option "$choice"
-            print_separator
+        local input token rc=0
+        local -a selections=()
+        input="$(ask 'Selection(s)' '1')" || return 1
+        input="${input//,/ }"
+        IFS=' ' read -r -a selections <<<"$input"
+        for token in "${selections[@]}"; do
+            [[ -n "$token" ]] || continue
+            execute_option "$token" || rc=$?
+            (( rc == 20 )) && { show_run_summary; return 0; }
         done
-
-        read -rp "Press [ENTER] to return to menu..."
+        ui_pause
     done
 }
 
 main() {
-    trap 'echo -e "\n"; msg_info "Script execution cancelled by user."; exit 130' INT
+    local mode="interactive"
+    while (($#)); do
+        case "$1" in
+            --audit) mode="audit" ;;
+            --recommended) mode="recommended" ;;
+            --all|--full) mode="all" ;;
+            --restore) mode="restore" ;;
+            --no-color) DOTFILES_NO_COLOR=1; ui_color_init ;;
+            --help|-h) usage; return 0 ;;
+            *) msg_error "Unknown argument: $1"; usage >&2; return 2 ;;
+        esac
+        shift
+    done
 
-    if [[ $(uname -s) != "Linux" ]]; then
-        msg_error "This script is only compatible with Linux distributions."
-        exit 1
-    fi
-
-    if [[ $EUID -ne 0 ]]; then
-        msg_warn "Root privileges required. Re-running with sudo..."
-        exec sudo "$0" "$@"
-    fi
-
-    local package_manager
-    package_manager=$(detect_package_manager) || exit 1
-
-    local os_distribution
-    os_distribution=$(detect_distribution) || exit 1
-
-    ensure_sudo_installed
-    create_initial_backup
-
-    # Parse arguments for unattended execution
-    if [[ "${1:-}" == "--all" || "${1:-}" == "-a" ]]; then
-        run_all_tasks "$package_manager" "$os_distribution"
-    else
-        show_interactive_menu "$package_manager" "$os_distribution"
-    fi
+    prepare_context || return 1
+    [[ "$mode" == "audit" ]] || start_hardening_evidence
+    local rc=0
+    case "$mode" in
+        audit) security_audit || rc=$? ;;
+        recommended) profile_recommended; show_run_summary ;;
+        all) profile_all; show_run_summary ;;
+        restore) restore_snapshot_menu || rc=$? ;;
+        interactive) interactive_menu || rc=$? ;;
+    esac
+    hardening_finalize_snapshot
+    return "$rc"
 }
 
-main "$@"
+if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
+    trap 'printf "\n" >&2; msg_warn "Hardening interrupted. Package-manager locks were not modified. Recovery snapshots remain in /var/backups/dotfiles-hardening."; exit 130' INT TERM
+    main "$@"
+fi

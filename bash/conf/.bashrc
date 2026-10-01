@@ -1,180 +1,157 @@
-# ~/.bashrc: executed by bash(1) for non-login shells.
+# ~/.bashrc - portable interactive Bash defaults for developer/admin workstations.
 
-# Ensure ~/.local/bin is in PATH
-if [[ ":$PATH:" != *":$HOME/.local/bin:"* ]]; then
-    export PATH="$HOME/.local/bin:$PATH"
-fi
-
-# If not running interactively, don't do anything
-case $- in
-    *i*) ;;
-      *) return;;
+# Keep ~/.local/bin first without duplicating PATH entries.
+case ":${PATH:-}:" in
+    *":$HOME/.local/bin:"*) ;;
+    *) export PATH="$HOME/.local/bin:${PATH:-/usr/bin:/bin}" ;;
 esac
 
-iatest=$(expr index "$-" i)
+# Nothing below is needed by non-interactive shells.
+[[ $- == *i* ]] || return 0
 
-# Disable the bell
-if [[ $iatest -gt 0 ]]; then bind "set bell-style none"; fi
-setterm --blength 0 > /dev/null 2>&1
+# XDG defaults: only set when the caller did not already choose values.
+export XDG_CONFIG_HOME="${XDG_CONFIG_HOME:-$HOME/.config}"
+export XDG_CACHE_HOME="${XDG_CACHE_HOME:-$HOME/.cache}"
+export XDG_DATA_HOME="${XDG_DATA_HOME:-$HOME/.local/share}"
+export XDG_STATE_HOME="${XDG_STATE_HOME:-$HOME/.local/state}"
 
-# https://unix.stackexchange.com/questions/545045/what-is-the-difference-between-ixon-and-ixoff-tty-attributes
-stty -ixon
+# Conservative editor selection. A user-provided EDITOR/VISUAL always wins.
+if [[ -z "${EDITOR:-}" ]]; then
+    if command -v nvim >/dev/null 2>&1; then
+        export EDITOR=nvim
+    elif command -v vim >/dev/null 2>&1; then
+        export EDITOR=vim
+    else
+        export EDITOR=vi
+    fi
+fi
+export VISUAL="${VISUAL:-$EDITOR}"
+export PAGER="${PAGER:-less}"
+export LESS="${LESS:--FRX}"
 
-export LANG="${LANG:-es_ES.UTF-8}"
-# Export LC_ALL only if specifically defined to prevent Perl locale warnings
-if [ -n "${LC_ALL:-}" ]; then
-    export LC_ALL
+# History: append instead of replacing other terminals' history.
+HISTSIZE="${HISTSIZE:-10000}"
+HISTFILESIZE="${HISTFILESIZE:-20000}"
+HISTCONTROL="${HISTCONTROL:-ignoreboth:erasedups}"
+HISTTIMEFORMAT="${HISTTIMEFORMAT:-%F %T }"
+shopt -s histappend checkwinsize
+
+# Quality-of-life shell behaviour.
+shopt -s globstar 2>/dev/null || true
+shopt -s cdspell 2>/dev/null || true
+
+# Terminal-only features must never emit errors in redirected/non-TTY contexts.
+if [[ -t 0 ]]; then
+    bind 'set bell-style none' 2>/dev/null || true
+    stty -ixon 2>/dev/null || true
 fi
 
-export EDITOR='vim'
-export VISUAL='vim'
+# GNU dircolors where available; leave BSD/non-GNU hosts alone.
+if command -v dircolors >/dev/null 2>&1; then
+    if [[ -r "$HOME/.dircolors" ]]; then
+        eval "$(dircolors -b "$HOME/.dircolors" 2>/dev/null)" || true
+    else
+        eval "$(dircolors -b 2>/dev/null)" || true
+    fi
+fi
 
-# Expand the history size
-export HISTFILESIZE=10000
-export HISTSIZE=500
-export HISTTIMEFORMAT="%F %T " # add timestamp to history
-
-# Don't put duplicate lines in the history and do not add lines that start with a space
-export HISTCONTROL=erasedups:ignoredups:ignorespace
-
-# Colors for ls and grep
-export CLICOLOR=1
-export LS_COLORS='no=00:fi=00:di=00;34:ln=01;36:pi=40;33:so=01;35:do=01;35:bd=40;33;01:cd=40;33;01:or=40;31;01:ex=01;32:*.tar=01;31:*.tgz=01;31:*.arj=01;31:*.taz=01;31:*.lzh=01;31:*.zip=01;31:*.z=01;31:*.Z=01;31:*.gz=01;31:*.bz2=01;31:*.deb=01;31:*.rpm=01;31:*.jar=01;31:*.jpg=01;35:*.jpeg=01;35:*.gif=01;35:*.bmp=01;35:*.pbm=01;35:*.pgm=01;35:*.ppm=01;35:*.tga=01;35:*.xbm=01;35:*.xpm=01;35:*.tif=01;35:*.tiff=01;35:*.png=01;35:*.mov=01;35:*.mpg=01;35:*.mpeg=01;35:*.avi=01;35:*.fli=01;35:*.gl=01;35:*.dl=01;35:*.xcf=01;35:*.xwd=01;35:*.ogg=01;35:*.mp3=01;35:*.wav=01;35:*.xml=00;31:'
-
-# Color for manpages
-export GROFF_NO_SGR=1
-export LESS_TERMCAP_mb=$'\E[01;31m'
-export LESS_TERMCAP_md=$'\E[01;31m'
-export LESS_TERMCAP_me=$'\E[0m'
-export LESS_TERMCAP_se=$'\E[0m'
-export LESS_TERMCAP_so=$'\E[01;44;33m'
-export LESS_TERMCAP_ue=$'\E[0m'
-export LESS_TERMCAP_us=$'\E[01;32m'
-export MANPAGER="less -R --use-color -Dd+r -Du+g"
-export MAN_KEEP_FORMATTING=1
-
-# User Agents
-export CHROME_DESKTOP_AGENT="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"
-export EDGE_DESKTOP_AGENT="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36 Edg/122.0.0.0"
-export FIREFOX_DESKTOP_AGENT="Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:123.0) Gecko/20100101 Firefox/123.0"
-export ANDROID_MOBILE_AGENT="Mozilla/5.0 (Linux; Android 13; SM-S901B) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Mobile Safari/537.36"
-export IPHONE_MOBILE_AGENT="Mozilla/5.0 (iPhone; CPU iPhone OS 17_3 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.3 Mobile/15E148 Safari/604.1"
-export GOOGLE_BOT_DESKTOP_AGENT="Mozilla/5.0 (Linux; Android 6.0.1; Nexus 5X Build/MMB29P) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Mobile Safari/537.36 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)"
-
-# Shell Options
-shopt -s checkwinsize
-shopt -s histappend
-shopt -s globstar
-shopt -s cdspell
-
-# XDG Base Directory Specification
-export XDG_DATA_HOME="$HOME/.local/share"
-export XDG_CONFIG_HOME="$HOME/.config"
-export XDG_STATE_HOME="$HOME/.local/state"
-export XDG_CACHE_HOME="$HOME/.cache"
-
-# If set, the pattern "**" used in a pathname expansion context will
-# match all files and zero or more directories and subdirectories.
-#shopt -s globstar
-
-# make less more friendly for non-text input files, see lesspipe(1)
+# lesspipe is optional and distro-specific.
 if command -v lesspipe >/dev/null 2>&1; then
-  eval "$(SHELL=/bin/sh lesspipe)"
+    eval "$(SHELL=/bin/sh lesspipe 2>/dev/null)" || true
 fi
 
-# An intelligent substitute for cd
-if command -v zoxide >/dev/null 2>&1; then
-  eval "$(zoxide init bash --cmd cd)"
-fi
-
-# Color support for ls / grep
-if [ -x /usr/bin/dircolors ]; then
-    test -r ~/.dircolors && eval "$(dircolors -b ~/.dircolors)" || eval "$(dircolors -b)"
-    alias ls='ls --color=auto'
-    alias grep='grep --color=auto'
-    alias fgrep='fgrep --color=auto'
-    alias egrep='egrep --color=auto'
-fi
-
-# Completion features
+# Bash completion locations used by the main distribution families.
 if ! shopt -oq posix; then
-  if [ -f /usr/share/bash-completion/bash_completion ]; then
-    . /usr/share/bash-completion/bash_completion
-  elif [ -f /etc/bash_completion ]; then
-    . /etc/bash_completion
-  fi
+    for _bc in \
+        /usr/share/bash-completion/bash_completion \
+        /etc/bash_completion
+    do
+        if [[ -r "$_bc" ]]; then
+            # shellcheck disable=SC1090
+            . "$_bc"
+            break
+        fi
+    done
+    unset _bc
 fi
 
-# Custom sources
-if [ -e "$HOME/.bash.aliases" ]; then
-    source "$HOME/.bash.aliases"
+# Optional fzf integration. Source only existing vendor files.
+for _fzf in \
+    /usr/share/doc/fzf/examples/key-bindings.bash \
+    /usr/share/fzf/key-bindings.bash
+do
+    [[ -r "$_fzf" ]] && { . "$_fzf"; break; }
+done
+for _fzf in \
+    /usr/share/doc/fzf/examples/completion.bash \
+    /usr/share/fzf/completion.bash
+do
+    [[ -r "$_fzf" ]] && { . "$_fzf"; break; }
+done
+unset _fzf
+
+# zoxide is additive; normal cd remains available if it is absent.
+if command -v zoxide >/dev/null 2>&1; then
+    eval "$(zoxide init bash --cmd cd 2>/dev/null)" || true
 fi
 
-if [ -e "$HOME/.bash.functions" ]; then
-    source "$HOME/.bash.functions"
-fi
+# Custom user helpers. Syntax errors should be visible but must not terminate the shell.
+for _dotfile in "$HOME/.bash.functions" "$HOME/.bash.aliases"; do
+    if [[ -r "$_dotfile" ]]; then
+        # shellcheck disable=SC1090
+        . "$_dotfile" || printf 'Warning: failed to load %s\n' "$_dotfile" >&2
+    fi
+done
+unset _dotfile
 
-# FZF key bindings
-if [ -f /usr/share/doc/fzf/examples/key-bindings.bash ]; then
-    source /usr/share/doc/fzf/examples/key-bindings.bash
-fi
-
-# FZF key bindings & completion (Ruta correcta para Arch Linux)
-if [ -f /usr/share/fzf/key-bindings.bash ]; then
-    source /usr/share/fzf/key-bindings.bash
-fi
-if [ -f /usr/share/fzf/completion.bash ]; then
-    source /usr/share/fzf/completion.bash
-fi
-
-# Disabled fastfetch to not start on new terminal sessions
-#if command -v fastfetch >/dev/null 2>&1; then
-#    fastfetch
-#fi
-
-
-sanitize() {
-  local s
-  s=$(printf '%s' "$1" | LC_ALL=C tr -d '\000-\037\177')
-  printf '%s' "${s:0:128}"
+# Compact prompt with status, user@host, working directory and current Git branch.
+__dotfiles_sanitize_prompt() {
+    local s="${1:-}"
+    s="$(printf '%s' "$s" | LC_ALL=C tr -d '\000-\037\177' 2>/dev/null)"
+    printf '%s' "${s:0:160}"
 }
 
-__STATUS_SEG=''
-__SAFE_PWD=''
-__GIT_SEG=''
+__DOT_STATUS=""
+__DOT_PWD=""
+__DOT_GIT=""
 
-__update_prompt_vars() {
-  local last_status=$?
+__dotfiles_prompt_command() {
+    local rc=$? branch=""
+    (( rc == 0 )) && __DOT_STATUS="" || __DOT_STATUS="✘${rc} "
+    __DOT_PWD="$(__dotfiles_sanitize_prompt "$PWD")"
 
-  if [ $last_status -ne 0 ]; then
-    __STATUS_SEG='✘ '
-  else
-    __STATUS_SEG=''
-  fi
+    if command -v git >/dev/null 2>&1; then
+        branch="$(git symbolic-ref --quiet --short HEAD 2>/dev/null || git rev-parse --short HEAD 2>/dev/null || true)"
+    fi
+    if [[ -n "$branch" ]]; then
+        __DOT_GIT=" git:$(__dotfiles_sanitize_prompt "$branch")"
+    else
+        __DOT_GIT=""
+    fi
 
-  __SAFE_PWD=$(sanitize "$PWD")
-
-  local G=/usr/bin/git b
-  local PATH=/usr/bin:/bin 
-
-  if [ -x "$G" ] && b=$("$G" rev-parse --abbrev-ref HEAD 2>/dev/null); then
-    b=$(sanitize "$b")
-    __GIT_SEG=" (git:$b)"
-  else
-    __GIT_SEG=''
-  fi
+    # Merge history written by other active terminals without clearing this shell's list.
+    history -a 2>/dev/null || true
+    history -n 2>/dev/null || true
+    return "$rc"
 }
 
-__sync_history() {
-  history -a
-  history -c
-  history -r
-}
-
+# Avoid adding the hook more than once when ~/.bashrc is re-sourced.
 if declare -p PROMPT_COMMAND 2>/dev/null | grep -q 'declare -a'; then
-  PROMPT_COMMAND=(__update_prompt_vars __sync_history "${PROMPT_COMMAND[@]}")
+    _dot_pc_found=0
+    for _dot_pc in "${PROMPT_COMMAND[@]}"; do
+        [[ "$_dot_pc" == "__dotfiles_prompt_command" ]] && _dot_pc_found=1
+    done
+    (( _dot_pc_found == 1 )) || PROMPT_COMMAND=(__dotfiles_prompt_command "${PROMPT_COMMAND[@]}")
+    unset _dot_pc _dot_pc_found
 else
-  PROMPT_COMMAND="__update_prompt_vars; __sync_history; ${PROMPT_COMMAND:-}"
+    case ";${PROMPT_COMMAND:-};" in
+        *';__dotfiles_prompt_command;'*) ;;
+        *) PROMPT_COMMAND="__dotfiles_prompt_command${PROMPT_COMMAND:+; $PROMPT_COMMAND}" ;;
+    esac
 fi
 
-PS1='\[\e[90m\][\t] \[\e[31m\]${__STATUS_SEG}\[\e[34m\]\u\[\e[0m\]@\[\e[32m\]\h\[\e[0m\]:\[\e[36m\]${__SAFE_PWD}\[\e[33m\]${__GIT_SEG}\[\e[0m\]\$ '
+if [[ -n "${NO_COLOR:-}" || "${TERM:-dumb}" == dumb ]]; then
+    PS1='[\t] ${__DOT_STATUS}\u@\h:${__DOT_PWD}${__DOT_GIT}\$ '
+else
+    PS1='\[\e[90m\][\t]\[\e[0m\] \[\e[31m\]${__DOT_STATUS}\[\e[34m\]\u\[\e[0m\]@\[\e[32m\]\h\[\e[0m\]:\[\e[36m\]${__DOT_PWD}\[\e[33m\]${__DOT_GIT}\[\e[0m\]\$ '
+fi

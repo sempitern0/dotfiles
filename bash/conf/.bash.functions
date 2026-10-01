@@ -1,318 +1,225 @@
-#!/usr/bin/env bash
-# ~/.bash.functions - Modernized, Multi-platform & Hardened Bash Functions
+# ~/.bash.functions - portable developer and sysadmin helpers.
 
-# Internal helper: Copy input stream to system clipboard across OS/environments
+_dot_has() { command -v "$1" >/dev/null 2>&1; }
+
 _copy_to_clipboard() {
-    if command -v wl-copy >/dev/null 2>&1; then
+    if _dot_has wl-copy; then
         wl-copy
-    elif command -v xclip >/dev/null 2>&1; then
+    elif _dot_has xclip; then
         xclip -selection clipboard
-    elif command -v pbcopy >/dev/null 2>&1; then
-        pbcopy
+    elif _dot_has xsel; then
+        xsel --clipboard --input
     else
-        cat >/dev/null
-        echo "[-] Error: No supported clipboard tool found (xclip, wl-copy, pbcopy)." >&2
+        printf 'No clipboard provider found (wl-copy/xclip/xsel).\n' >&2
         return 1
     fi
 }
 
-#######################################################
-# ARCHIVE & FILE HANDLING
-#######################################################
-
-# Extracts any archive format intelligently
 extract() {
-    if [ $# -eq 0 ]; then
-        echo "Usage: extract <file1> [file2 ...]"
-        return 1
-    fi
-
+    (($#)) || { printf 'Usage: extract <archive> [...]\n' >&2; return 2; }
+    local archive rc=0
     for archive in "$@"; do
-        if [ -f "$archive" ]; then
-            case "${archive,,}" in
-                *.tar.bz2 | *.tbz2) tar xvjf "$archive" ;;
-                *.tar.gz | *.tgz)  tar xvzf "$archive" ;;
-                *.tar.xz)          tar xvJf "$archive" ;;
-                *.tar.zst)         tar --zstd -xvf "$archive" ;;
-                *.tar)             tar xvf "$archive" ;;
-                *.bz2)             bunzip2 "$archive" ;;
-                *.rar)             unrar x "$archive" 2>/dev/null || rar x "$archive" ;;
-                *.gz)              gunzip "$archive" ;;
-                *.zip)             unzip "$archive" ;;
-                *.zst)             zstd -d "$archive" ;;
-                *.7z)              7z x "$archive" ;;
-                *.xz)              xz -d "$archive" ;;
-                *)                 echo "[-] Error: '$archive' cannot be extracted via extract()" ;;
-            esac
-        else
-            echo "[-] Error: '$archive' is not a valid file."
-        fi
+        [[ -f "$archive" ]] || { printf 'Not a file: %s\n' "$archive" >&2; rc=1; continue; }
+        case "${archive,,}" in
+            *.tar.gz|*.tgz) tar -xzf "$archive" || rc=1 ;;
+            *.tar.bz2|*.tbz2) tar -xjf "$archive" || rc=1 ;;
+            *.tar.xz|*.txz) tar -xJf "$archive" || rc=1 ;;
+            *.tar.zst) tar --zstd -xf "$archive" || rc=1 ;;
+            *.tar) tar -xf "$archive" || rc=1 ;;
+            *.zip) _dot_has unzip && unzip "$archive" || rc=1 ;;
+            *.7z) _dot_has 7z && 7z x "$archive" || rc=1 ;;
+            *.rar) _dot_has unrar && unrar x "$archive" || rc=1 ;;
+            *.gz) gzip -dk "$archive" || rc=1 ;;
+            *.bz2) bzip2 -dk "$archive" || rc=1 ;;
+            *.xz) xz -dk "$archive" || rc=1 ;;
+            *.zst) _dot_has zstd && zstd -d "$archive" || rc=1 ;;
+            *) printf 'Unsupported archive: %s\n' "$archive" >&2; rc=1 ;;
+        esac
     done
+    return "$rc"
 }
 
-# Create a timestamped backup copy of a file or directory
 backup() {
-    if [ ! -e "$1" ]; then
-        echo "[-] Error: Target '$1' does not exist."
-        return 1
-    fi
-    local target="$1.bak.$(date +%Y%m%d_%H%M%S)"
-    cp -r "$1" "$target" && echo "[+] Backup created: $target"
+    (($# == 1)) || { printf 'Usage: backup <path>\n' >&2; return 2; }
+    [[ -e "$1" || -L "$1" ]] || { printf 'Path not found: %s\n' "$1" >&2; return 1; }
+    local dst="${1%/}.bak.$(date +%Y%m%d-%H%M%S)"
+    cp -a -- "$1" "$dst" && printf 'Backup: %s\n' "$dst"
 }
 
-# Copy file content directly to system clipboard
-topaste() {
-    if [ -f "$1" ]; then
-        _copy_to_clipboard < "$1" && echo "📋 Content of '$(basename "$1")' copied to clipboard."
-    else
-        echo "❌ Error: File '$1' does not exist."
-        return 1
-    fi
-}
-
-# Create a Base64 Data URL from a file
-dataurl() {
-    if [ ! -f "$1" ]; then
-        echo "[-] Error: File '$1' not found."
-        return 1
-    fi
-
-    local mime_type
-    mime_type=$(file -b --mime-type "$1")
-    if [[ $mime_type == text/* ]]; then
-        mime_type="${mime_type};charset=utf-8"
-    fi
-
-    local b64
-    if command -v openssl >/dev/null 2>&1; then
-        b64=$(openssl base64 -in "$1" | tr -d '\r\n')
-    else
-        b64=$(base64 -w 0 "$1" 2>/dev/null || base64 "$1" | tr -d '\r\n')
-    fi
-
-    echo "data:${mime_type};base64,${b64}"
-}
-
-#######################################################
-# NAVIGATION & SEARCH
-#######################################################
-
-# Create directory and enter it immediately
 mkcd() {
-    if [ -z "$1" ]; then
-        echo "Usage: mkcd <directory_path>"
-        return 1
-    fi
-    mkdir -p "$1" && cd "$1" || return
+    (($# == 1)) || { printf 'Usage: mkcd <directory>\n' >&2; return 2; }
+    mkdir -p -- "$1" && cd -- "$1" || return
 }
 
-# Navigate up N directories in the tree
 up() {
-    local limit="${1:-1}"
-    if ! [[ "$limit" =~ ^[0-9]+$ ]]; then
-        echo "[-] Error: Argument must be a positive integer."
-        return 1
-    fi
-    local d=""
-    for ((i=1; i<=limit; i++)); do
-        d="../$d"
-    done
-    cd "$d" || return
+    local n="${1:-1}" path="" i
+    [[ "$n" =~ ^[1-9][0-9]*$ ]] || { printf 'Usage: up [positive-integer]\n' >&2; return 2; }
+    for ((i=0; i<n; i++)); do path+="../"; done
+    cd -- "$path" || return
 }
 
-# Fast recursive text search using ripgrep, ag, or grep
+gitroot() {
+    local root
+    root="$(git rev-parse --show-toplevel 2>/dev/null)" || { printf 'Not inside a Git worktree.\n' >&2; return 1; }
+    cd -- "$root" || return
+}
+
 ftext() {
-    if [ -z "$1" ]; then
-        echo "Usage: ftext <search_term>"
-        return 1
-    fi
-
-    if command -v rg >/dev/null 2>&1; then
-        rg -i --heading --line-number --color=always "$1" | less -r
-    elif command -v ag >/dev/null 2>&1; then
-        ag -i --color "$1" | less -r
+    (($#)) || { printf 'Usage: ftext <pattern> [path]\n' >&2; return 2; }
+    local pattern="$1" path="${2:-.}"
+    if _dot_has rg; then
+        rg --smart-case --line-number --heading --color=always -- "$pattern" "$path" | ${PAGER:-less} -R
     else
-        grep -iIHrn --color=always "$1" . | less -r
+        grep -RIn --color=always --exclude-dir=.git -- "$pattern" "$path" | ${PAGER:-less} -R
     fi
 }
 
-# Tree output rendered with color and less paging
 tre() {
-    if command -v eza >/dev/null 2>&1; then
-        eza --tree --icons=auto --ignore-glob=".git" "$@" | less -FRNX
+    if _dot_has eza; then
+        eza --tree --group-directories-first --ignore-glob='.git' "$@" | ${PAGER:-less} -FRX
+    elif _dot_has tree; then
+        tree -aC -I .git --dirsfirst "$@" | ${PAGER:-less} -FRX
     else
-        tree -aC -I '.git' --dirsfirst "$@" | less -FRNX
+        find "${1:-.}" -maxdepth "${2:-2}" -print | ${PAGER:-less} -FRX
     fi
 }
 
-#######################################################
-# NETWORKING & SECURITY
-#######################################################
-
-# Extract IP address and open ports from Nmap output into clipboard
-extractNmapPorts() {
-    if [ ! -f "$1" ]; then
-        echo "[-] Error: File '$1' not found."
-        return 1
-    fi
-
-    local ip_address ports
-    ip_address=$(grep -oP '\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}' "$1" | sort -u | head -n 1)
-    ports=$(grep -oP '\d{1,5}/open' "$1" | awk -F'/' '{print $1}' | xargs | tr ' ' ',')
-
-    if [ -z "$ports" ]; then
-        echo "[-] No open ports found in $1"
-        return 1
-    fi
-
-    echo -e "\n[*] Extracted Target Information:"
-    echo -e "    [+] IP Address: ${ip_address:-Unknown}"
-    echo -e "    [+] Open Ports: ${ports}\n"
-
-    echo -n "$ports" | _copy_to_clipboard
-    echo "[*] Open ports copied to clipboard!"
+topaste() {
+    (($# == 1)) || { printf 'Usage: topaste <file>\n' >&2; return 2; }
+    [[ -f "$1" ]] || { printf 'File not found: %s\n' "$1" >&2; return 1; }
+    _copy_to_clipboard <"$1" && printf 'Copied %s to clipboard.\n' "$1"
 }
 
-# Concise DNS lookup for all record types
+dataurl() {
+    (($# == 1)) || { printf 'Usage: dataurl <file>\n' >&2; return 2; }
+    [[ -f "$1" ]] || return 1
+    local mime b64
+    mime="$(_dot_has file && file -b --mime-type "$1" || printf application/octet-stream)"
+    if _dot_has base64; then
+        b64="$(base64 "$1" | tr -d '\r\n')" || return 1
+    elif _dot_has openssl; then
+        b64="$(openssl base64 -A -in "$1")" || return 1
+    else
+        printf 'base64 or openssl is required.\n' >&2; return 1
+    fi
+    printf 'data:%s;base64,%s\n' "$mime" "$b64"
+}
+
 digg() {
-    if [ -z "$1" ]; then
-        echo "Usage: digg <domain>"
-        return 1
-    fi
-    dig +nocmd "$1" any +multiline +noall +answer
-}
-
-# Fetch geolocation info for an IP address or domain
-ipinfo() {
-    local target="${1:-me}"
-    curl -s "https://ipapi.co/${target}/json/" | grep -E '"ip"|"city"|"region"|"country_name"|"org"'
+    (($#)) || { printf 'Usage: digg <name> [type]\n' >&2; return 2; }
+    _dot_has dig || { printf 'dig is not installed.\n' >&2; return 1; }
+    dig +noall +answer "$1" "${2:-A}"
 }
 
 myip() {
-    # List of fallback URLs to retrieve public IP address
-    local urls=(
-        "https://ifconfig.me"
-        "https://icanhazip.com"
-        "https://api.ipify.org"
-        "https://ipinfo.io/ip"
-    )
-
-    local public_ip=""
-
-    # Iterate through services until a valid response is received (3s timeout per request)
-    for url in "${urls[@]}"; do
-        public_ip=$(curl -s --max-time 3 "$url")
-        if [ $? -eq 0 ] && [ -n "$public_ip" ]; then
-            break
-        fi
-        public_ip=""
+    printf 'Local addresses:\n'
+    ip -brief address 2>/dev/null || hostname -I 2>/dev/null || true
+    printf '\nPublic address:\n'
+    local url value=""
+    for url in https://api.ipify.org https://ifconfig.me/ip https://icanhazip.com; do
+        value="$(curl -fsS --connect-timeout 2 --max-time 4 "$url" 2>/dev/null || true)"
+        [[ "$value" =~ ^[0-9A-Fa-f:.]+$ ]] && { printf '%s\n' "$value"; return 0; }
     done
-
-    # Display public IP results
-    echo "=== Public IP ==="
-    if [ -n "$public_ip" ]; then
-        echo "$public_ip"
-    else
-        echo "Public IP could not be obtained (all services failed)."
-    fi
-
-    # Display local network interface addresses
-    echo ""
-    echo "=== Local Interfaces (IPv4) ==="
-    ip -brief -4 address
+    printf 'Unavailable.\n' >&2
+    return 1
 }
 
-# Quick local HTTP server on a specified port (default: 8000)
-server() {
-    local port="${1:-8000}"
-
-    if command -v python3 >/dev/null 2>&1; then
-        echo "[+] Serving HTTP on 0.0.0.0 port $port..."
-        python3 -m http.server "$port"
-    elif command -v php >/dev/null 2>&1; then
-        echo "[+] Serving HTTP on 0.0.0.0 port $port..."
-        php -S "0.0.0.0:$port"
+serve() {
+    local bind="127.0.0.1" port="8000"
+    while (($#)); do
+        case "$1" in
+            --public) bind="0.0.0.0" ;;
+            -b|--bind) [[ $# -ge 2 ]] || { printf 'Missing bind address.\n' >&2; return 2; }; bind="$2"; shift ;;
+            -p|--port) [[ $# -ge 2 ]] || { printf 'Missing port.\n' >&2; return 2; }; port="$2"; shift ;;
+            -h|--help) printf 'Usage: serve [--public] [--bind ADDRESS] [--port PORT]\n'; return 0 ;;
+            *) port="$1" ;;
+        esac
+        shift
+    done
+    [[ "$port" =~ ^[0-9]+$ ]] && (( port >= 1 && port <= 65535 )) || { printf 'Invalid port.\n' >&2; return 2; }
+    printf 'Serving %s:%s from %s\n' "$bind" "$port" "$PWD"
+    if _dot_has python3; then
+        python3 -m http.server --bind "$bind" "$port"
+    elif _dot_has php; then
+        php -S "$bind:$port"
     else
-        echo "[-] Error: Neither Python 3 nor PHP is installed."
-        return 1
+        printf 'python3 or php is required.\n' >&2; return 1
     fi
 }
 
-#######################################################
-# SYSTEM & UTILITIES
-#######################################################
-
-# Interactive process termination using fzf
 fkill() {
-    if ! command -v fzf >/dev/null 2>&1; then
-        echo "[-] Error: fzf is required for fkill."
-        return 1
-    fi
-
-    local pid
-    
-    pid=$(ps -ef | sed 1d | fzf -m --header="Select process(es) to kill" | awk '{print $2}')
-
-    if [ -n "$pid" ]; then
-        echo "$pid" | xargs kill -9
-        echo "[+] Process(es) $pid terminated."
-    fi
+    _dot_has fzf || { printf 'fzf is required.\n' >&2; return 1; }
+    local signal="TERM"
+    [[ "${1:-}" == "--force" ]] && { signal="KILL"; shift; }
+    local pids
+    pids="$(ps -eo pid,user,stat,etimes,command --sort=-etimes | sed 1d | fzf -m --header="Select process(es); signal=$signal" | awk '{print $1}')"
+    [[ -n "$pids" ]] || return 0
+    while IFS= read -r pid; do
+        [[ "$pid" =~ ^[0-9]+$ ]] && kill -s "$signal" "$pid"
+    done <<<"$pids"
 }
 
-# Generate a cryptographically secure random password
 genpass() {
-    local length="${1:-20}"
-    openssl rand -base64 48 | tr -dc 'a-zA-Z0-9!@#$%^&*()_+' | head -c "$length"
-    echo ""
+    local length="${1:-24}"
+    [[ "$length" =~ ^[0-9]+$ ]] && (( length >= 8 && length <= 256 )) || { printf 'Usage: genpass [8-256]\n' >&2; return 2; }
+    _dot_has openssl || { printf 'openssl is required.\n' >&2; return 1; }
+    # Hex avoids SIGPIPE-prone filtering pipelines and remains cryptographically random.
+    local bytes=$(( (length + 1) / 2 )) out
+    out="$(openssl rand -hex "$bytes")" || return 1
+    printf '%s\n' "${out:0:length}"
 }
-
-# genpassphrase 6 | river-shadow-stone-planet-silver-winter
-# genpassphrase 5 . | cloud.signal.forest.rocket.amber
-# genpassphrase 4 - es | hola-amigos-que-tal
 
 genpassphrase() {
-    local word_count="${1:-4}"
-    local separator="${2:--}"
-    local target_lang="${3:-}"
+    local count="${1:-4}" sep="${2:--}" dict=""
+    [[ "$count" =~ ^[1-9][0-9]*$ ]] || { printf 'Usage: genpassphrase [count] [separator]\n' >&2; return 2; }
+    for dict in /usr/share/dict/words /usr/share/dict/american-english /usr/share/dict/spanish; do
+        [[ -r "$dict" ]] && break
+    done
+    [[ -r "$dict" ]] || { printf 'No system word list found.\n' >&2; return 1; }
+    awk 'length($0)>=4 && length($0)<=9 && $0 ~ /^[[:alpha:]]+$/ {print tolower($0)}' "$dict" |
+        shuf -n "$count" | paste -sd "$sep" -
+}
 
-    # Auto-detect language if not explicitly provided
-    if [[ -z "$target_lang" ]]; then
-        local sys_locale="${LANG:-${LC_ALL:-}}"
-        if [[ "$sys_locale" =~ ^en ]]; then
-            target_lang="en"
-        else
-            target_lang="es"
+mkvenv() {
+    local dir="${1:-.venv}"
+    _dot_has python3 || { printf 'python3 is required.\n' >&2; return 1; }
+    python3 -m venv "$dir" || return 1
+    # shellcheck disable=SC1090
+    . "$dir/bin/activate"
+}
+
+retry() {
+    local attempts="${1:-3}" delay="${2:-2}"
+    shift 2 2>/dev/null || true
+    (($#)) || { printf 'Usage: retry <attempts> <delay-seconds> command ...\n' >&2; return 2; }
+    local i rc=0
+    for ((i=1; i<=attempts; i++)); do
+        "$@" && return 0
+        rc=$?
+        (( i < attempts )) && sleep "$delay"
+    done
+    return "$rc"
+}
+
+sysupdate() {
+    if _dot_has apt-get; then
+        sudo apt-get update && sudo apt-get upgrade
+    elif _dot_has dnf; then
+        sudo dnf upgrade --refresh
+    elif _dot_has pacman; then
+        sudo pacman -Syu
+    elif _dot_has zypper; then
+        local os_id=""
+        if [[ -r /etc/os-release ]]; then
+            os_id="$(. /etc/os-release; printf '%s' "${ID:-}")"
         fi
-    fi
-
-    local dict_file=""
-    local regex=""
-
-    # Normalize input language to lowercase and configure settings
-    case "${target_lang,,}" in
-        en|us|english)
-            dict_file="/usr/share/dict/american-english"
-            [[ ! -f "$dict_file" ]] && dict_file="/usr/share/dict/words"
-            regex='^[a-zA-Z]{3,8}$'
-            ;;
-        es|spanish|*)
-            # Spanish configuration (default fallback)
-            dict_file="/usr/share/dict/spanish"
-            [[ ! -f "$dict_file" ]] && dict_file="/usr/share/dict/words"
-            regex='^[a-zA-ZáéíóúÁÉÍÓÚñÑ]{3,8}$'
-            ;;
-    esac
-
-    # Ensure dictionary file exists
-    if [[ ! -f "$dict_file" ]]; then
-        echo "Error: Dictionary file not found at $dict_file" >&2
+        if [[ "$os_id" == "opensuse-tumbleweed" || "$os_id" == "opensuse-microos" ]]; then
+            sudo zypper refresh && sudo zypper dup
+        else
+            sudo zypper refresh && sudo zypper update
+        fi
+    else
+        printf 'No supported package manager found.\n' >&2
         return 1
     fi
-
-    # Filter words, strip accents/tildes via sed, pick randomly, convert to lowercase, and join
-    grep -E "$regex" "$dict_file" | \
-        sed 'y/áéíóúÁÉÍÓÚñÑ/aeiouAEIOUnN/' | \
-        shuf -n "$word_count" | \
-        tr '[:upper:]' '[:lower:]' | \
-        paste -sd "$separator" -
 }

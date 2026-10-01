@@ -1,104 +1,66 @@
-#!/usr/bin/env bash
-set -euo pipefail
-
-msg_info()    { echo -e "\e[34m[INFO]\e[0m $*"; }
-msg_success() { echo -e "\e[32m[OK]\e[0m $*"; }
-msg_warn()    { echo -e "\e[33m[WARN]\e[0m $*"; }
-msg_error()   { echo -e "\e[31m[ERROR]\e[0m $*"; }
+# shellcheck shell=bash
+# Optional DNS privacy/security module. No immutable resolv.conf and no network
+# manager is disabled. The function performs no action until explicitly called.
 
 verify_quad9() {
-    msg_info "Verifying connection to Quad9..."
-    sleep 2
-
-    if ! command -v dig &>/dev/null; then
-        msg_warn "Tool 'dig' is not installed. Skipping Quad9 validation protocol check."
-        return 0
-    fi
-
-    local proto
-    proto=$(dig +short +time=2 +tries=1 txt proto.on.quad9.net 2>/dev/null | tr -d '"')
-
-    if [[ "$proto" == "dot" ]]; then
-        msg_success "Quad9 successfully configured with DNS-over-TLS (DoT)."
-    elif [[ "$proto" == "do53-udp" || "$proto" == "do53-tcp" ]]; then
-        msg_warn "Connected to Quad9 via standard DNS (Protocol: $proto)."
-    else
-        msg_error "Could not confirm Quad9 usage. Verify network connectivity or firewall rules."
-    fi
+    command_exists dig || { msg_warn "dig unavailable; checking resolver reachability only."; return 0; }
+    local answer=""
+    answer="$(dig +short +time=3 +tries=1 txt proto.on.quad9.net 2>/dev/null | tr -d '"' || true)"
+    [[ -n "$answer" ]] && msg_info "Quad9 protocol probe: $answer" || msg_warn "Quad9 protocol probe did not return data."
 }
 
 configure_quad9_dns() {
-    msg_info "Configuring Quad9 DNS (Malware blocking, DNSSEC)..."
+    msg_warn "Changing DNS can break split-DNS, VPN and Active Directory environments."
+    confirm_literal "Apply Quad9 as the host-wide resolver? Existing resolver configuration will be backed up." "APPLY-DNS" || return 0
 
-    # Step 1: Prevent active network daemons from overwriting DNS
-    prevent_all_dns_overrides
-
-    # Detect WSL environment
-    if grep -qi "microsoft" /proc/version 2>/dev/null; then
-        msg_info "WSL environment detected. Disabling automatic resolv.conf generation in /etc/wsl.conf..."
-        if [[ -f /etc/wsl.conf ]]; then
-            if ! grep -q "generateResolvConf" /etc/wsl.conf; then
-                echo -e "\n[network]\ngenerateResolvConf = false" >> /etc/wsl.conf
-            fi
-        else
-            echo -e "[network]\ngenerateResolvConf = false" > /etc/wsl.conf
-        fi
-    fi
-
-    local resolved_dir="/etc/systemd/resolved.conf.d"
-    local resolved_conf="${resolved_dir}/quad9.conf"
-
-    # Step 2: Primary configuration via systemd-resolved
-    if systemctl is-active --quiet systemd-resolved 2>/dev/null; then
-        mkdir -p "$resolved_dir"
-        
-        cat << 'EOF' > "$resolved_conf"
+    if systemctl is-active --quiet systemd-resolved.service 2>/dev/null; then
+        hardening_backup_path /etc/systemd/resolved.conf.d/90-dotfiles-quad9.conf || return 1
+        hardening_backup_path /etc/resolv.conf || return 1
+        mkdir -p /etc/systemd/resolved.conf.d
+        cat >/etc/systemd/resolved.conf.d/90-dotfiles-quad9.conf <<'EOF_RESOLVED'
 [Resolve]
-DNS=9.9.9.9#dns.quad9.net 149.112.112.112#dns.quad9.net 2620:fe::fe#dns.quad9.net
-FallbackDNS=9.9.9.10#dns.quad9.net 149.112.112.10#dns.quad9.net 2620:fe::10#dns.quad9.net
-# Changed to opportunistic to avoid complete network failure if port 853 TCP is blocked
+DNS=9.9.9.9#dns.quad9.net 149.112.112.112#dns.quad9.net
 DNSOverTLS=opportunistic
 DNSSEC=allow-downgrade
-Domains=~.
-EOF
-        chmod 644 "$resolved_conf"
-        
-        # Link /etc/resolv.conf to systemd-resolved stub
-        chattr -i /etc/resolv.conf 2>/dev/null || true
-        rm -f /etc/resolv.conf
-        ln -sf /run/systemd/resolve/stub-resolv.conf /etc/resolv.conf
-
-        msg_info "Restarting systemd-resolved to apply changes..."
-        if systemctl restart systemd-resolved; then
-            msg_success "Quad9 DNS configured via systemd-resolved."
-            verify_quad9
-            return 0
-        else
-            msg_warn "Failed to restart systemd-resolved. Falling back to static /etc/resolv.conf..."
-            rm -f "$resolved_conf"
-        fi
+EOF_RESOLVED
+        systemctl restart systemd-resolved.service || return 1
+        verify_quad9
+        return 0
     fi
 
-    # Step 3: Fallback - Static /etc/resolv.conf
-    msg_warn "Applying Quad9 directly to /etc/resolv.conf..."
+    if command_exists nmcli && systemctl is-active --quiet NetworkManager.service 2>/dev/null; then
+        local conn="" uuid="" dev="" state_file="" v4_ignore="" v4_dns="" v6_ignore="" v6_dns=""
+        conn="$(nmcli -t -f NAME connection show --active 2>/dev/null | head -n1)"
+        [[ -n "$conn" ]] || { msg_error "No active NetworkManager connection found."; return 1; }
+        uuid="$(nmcli -g connection.uuid connection show "$conn" 2>/dev/null | head -n1)"
+        dev="$(nmcli -g GENERAL.DEVICES connection show "$conn" 2>/dev/null | head -n1)"
+        [[ -n "$uuid" ]] || { msg_error "Unable to resolve NetworkManager connection UUID."; return 1; }
 
-    chattr -i /etc/resolv.conf 2>/dev/null || true
-    rm -f /etc/resolv.conf
+        hardening_snapshot_init || return 1
+        state_file="$HARDENING_SNAPSHOT/networkmanager-dns.env"
+        v4_ignore="$(nmcli -g ipv4.ignore-auto-dns connection show "$uuid" 2>/dev/null || true)"
+        v4_dns="$(nmcli -g ipv4.dns connection show "$uuid" 2>/dev/null || true)"
+        v6_ignore="$(nmcli -g ipv6.ignore-auto-dns connection show "$uuid" 2>/dev/null || true)"
+        v6_dns="$(nmcli -g ipv6.dns connection show "$uuid" 2>/dev/null || true)"
+        {
+            printf 'NM_UUID=%q\n' "$uuid"
+            printf 'NM_DEVICE=%q\n' "$dev"
+            printf 'NM_V4_IGNORE=%q\n' "$v4_ignore"
+            printf 'NM_V4_DNS=%q\n' "$v4_dns"
+            printf 'NM_V6_IGNORE=%q\n' "$v6_ignore"
+            printf 'NM_V6_DNS=%q\n' "$v6_dns"
+        } >"$state_file"
+        chmod 0600 "$state_file"
+        nmcli connection show "$uuid" >"$HARDENING_SNAPSHOT/evidence/networkmanager-before.txt" 2>&1 || true
 
-    cat << 'EOF' > /etc/resolv.conf
-# Manually configured - Quad9 DNS
-nameserver 9.9.9.9
-nameserver 149.112.112.112
-nameserver 2620:fe::fe
-EOF
-
-    # Apply immutable flag only if not in WSL / container
-    if ! grep -qi "microsoft" /proc/version 2>/dev/null; then
-        chattr +i /etc/resolv.conf 2>/dev/null || true
+        msg_warn "NetworkManager connection '$conn' will be changed; its previous DNS settings are rollback-capable."
+        nmcli connection modify "$uuid"             ipv4.ignore-auto-dns yes ipv4.dns "9.9.9.9 149.112.112.112"             ipv6.ignore-auto-dns yes ipv6.dns "2620:fe::fe 2620:fe::9" || return 1
+        nmcli connection up "$uuid" || return 1
+        verify_quad9
+        return 0
     fi
 
-    msg_success "Quad9 DNS applied directly to /etc/resolv.conf."
-    verify_quad9
+    msg_warn "Neither systemd-resolved nor an active NetworkManager connection is available."
+    msg_warn "Static /etc/resolv.conf is intentionally not overwritten by this assistant."
+    return 1
 }
-
-configure_quad9_dns

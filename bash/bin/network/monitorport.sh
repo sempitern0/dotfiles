@@ -1,44 +1,54 @@
 #!/usr/bin/env bash
+# Wait for a TCP endpoint without assuming netcat is installed.
+set -u
+set -o pipefail
 
-# Restore terminal cursor and reset color formatting on exit (SIGINT/SIGTERM)
-trap 'tput cnorm 2>/dev/null; printf "\e[0m\n"; exit 1' INT TERM
+usage() {
+    cat <<'EOF_HELP'
+Usage: monitorport <host> <port> [interval-seconds] [timeout-seconds]
+Example: monitorport example.com 443 2 120
 
-# Validate required arguments (Host and Port) or display help
-if [[ "$1" == "-h" || -z "$1" || -z "$2" ]]; then
-  cat <<'EOF'
-SUMMARY:
---------
-This script will monitor a port UNTIL it becomes available.
+The final timeout is optional; 0 means wait indefinitely.
+EOF_HELP
+}
 
-USAGE:
-------
-monitorPort.sh [hostname] [port_number] [interval_seconds]
-monitorPort.sh google.com 443
-monitorPort.sh 127.0.0.1 8080 2
+[[ "${1:-}" == -h || "${1:-}" == --help ]] && { usage; exit 0; }
+[[ $# -ge 2 ]] || { usage >&2; exit 2; }
+HOST="$1" PORT="$2" INTERVAL="${3:-1}" LIMIT="${4:-0}"
+[[ "$PORT" =~ ^[0-9]+$ ]] && (( PORT >= 1 && PORT <= 65535 )) || { printf 'Invalid port: %s\n' "$PORT" >&2; exit 2; }
+[[ "$INTERVAL" =~ ^[0-9]+([.][0-9]+)?$ ]] || { printf 'Invalid interval.\n' >&2; exit 2; }
+[[ "$LIMIT" =~ ^[0-9]+$ ]] || { printf 'Invalid timeout.\n' >&2; exit 2; }
 
-Version 1.1.0
-EOF
-  exit 0
-fi
+TTY=0
+[[ -t 1 ]] && TTY=1
+cleanup() { (( TTY == 1 )) && { tput cnorm 2>/dev/null || true; printf '\r\033[K'; }; }
+trap cleanup EXIT INT TERM
+(( TTY == 1 )) && tput civis 2>/dev/null || true
 
-HOST="$1"
-PORT="$2"
-INTERVAL="${3:-1}"
-ctr=1
+probe() {
+    if command -v nc >/dev/null 2>&1; then
+        nc -z -w 2 "$HOST" "$PORT" >/dev/null 2>&1
+    elif command -v timeout >/dev/null 2>&1; then
+        timeout 2 bash -c 'exec 3<>"/dev/tcp/$1/$2"' _ "$HOST" "$PORT" >/dev/null 2>&1
+    else
+        bash -c 'exec 3<>"/dev/tcp/$1/$2"' _ "$HOST" "$PORT" >/dev/null 2>&1
+    fi
+}
 
-# Hide terminal cursor during operation
-tput civis 2>/dev/null
-
-printf "\e[33mMonitoring %s:%s...\e[0m\n" "$HOST" "$PORT"
-
-# Poll target host and port until connection succeeds
-while ! nc -z -w 1 "$HOST" "$PORT" &> /dev/null; do
-  printf "\r\e[31mWaiting for %s:%s (#%d)...\e[0m\e[K" "$HOST" "$PORT" "$ctr"
-  ((ctr++))
-  sleep "$INTERVAL"
+start="$(date +%s)" count=0
+printf 'Waiting for %s:%s ...\n' "$HOST" "$PORT"
+while ! probe; do
+    ((count+=1))
+    now="$(date +%s)"
+    if (( LIMIT > 0 && now - start >= LIMIT )); then
+        printf '\nTimeout after %ss: %s:%s is still unavailable.\n' "$LIMIT" "$HOST" "$PORT" >&2
+        exit 1
+    fi
+    if (( TTY == 1 )); then
+        printf '\rAttempt %-5d elapsed=%ss' "$count" "$((now-start))"
+    else
+        printf 'Attempt %d: unavailable\n' "$count"
+    fi
+    sleep "$INTERVAL"
 done
-
-# Restore terminal cursor on success
-tput cnorm 2>/dev/null
-
-printf "\r\e[32m[SUCCESS] %s:%s is now reachable! (#%d)\e[0m\e[K\n" "$HOST" "$PORT" "$ctr"
+printf '\r\033[KReachable: %s:%s\n' "$HOST" "$PORT"

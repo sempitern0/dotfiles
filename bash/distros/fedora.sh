@@ -1,131 +1,34 @@
-#!/usr/bin/env bash
-set -euo pipefail
+# shellcheck shell=bash
+# Package provider for Fedora/RHEL-compatible families. Configured official repositories only.
 
-# Log helpers
-msg_info()    { echo -e "\e[34m[INFO]\e[0m $*"; }
-msg_success() { echo -e "\e[32m[OK]\e[0m $*"; }
-msg_warn()    { echo -e "\e[33m[WARN]\e[0m $*"; }
-msg_error()   { echo -e "\e[31m[ERROR]\e[0m $*"; }
+DISTRO_PACKAGE_MANAGER="dnf"
 
-# Global context
-TARGET_USER="${SUDO_USER:-$USER}"
-TARGET_HOME=$(getent passwd "$TARGET_USER" | cut -d: -f6)
+pkg_refresh() { run_as_root dnf -q makecache; }
+pkg_available() { dnf -q info "$1" >/dev/null 2>&1; }
+pkg_installed() { rpm -q "$1" >/dev/null 2>&1; }
+pkg_install() { run_as_root dnf install -y "$@"; }
+pkg_upgrade() { run_as_root dnf upgrade -y; }
+pkg_remove() { run_as_root dnf remove -y "$@"; }
 
-PACKAGE_MANAGER="dnf"
-
-# Commands
-INSTALL_CMD=("${PACKAGE_MANAGER}" "install" "-y" "-q")
-UPDATE_CMD=("${PACKAGE_MANAGER}" "makecache" "-q")
-UPGRADE_CMD=("${PACKAGE_MANAGER}" "upgrade" "-y" "-q")
-CLEANUP_CMD=("${PACKAGE_MANAGER}" "autoremove" "-y" "-q")
-
-# Core CLI packages
-PACKAGES=(
-    coreutils man-db curl wget ca-certificates tree vim git sudo
-    gcc gcc-c++ make jq fzf htop iftop btop bat ripgrep fd-find ncdu duf micro
-    words bind-utils net-tools traceroute mtr psmisc lsof timeshift
-    nmap whois lynis chkrootkit ufw wireshark-cli
-    bluez bluez-tools chrony zram-generator golang zoxide fastfetch
+DISTRO_PACKAGES_CORE=(
+    bash bash-completion ca-certificates curl wget git vim-enhanced openssl less man-db
+    unzip zip tar xz rsync jq tree file openssh-clients
 )
-
-# Graphical tools
-GUI_PACKAGES=(
-    xclip feh chafa kitty tilix
+DISTRO_PACKAGES_DEV=(
+    gcc gcc-c++ make pkgconf-pkg-config git-lfs ShellCheck
+    python3 python3-pip words
 )
-
-# Systemd services (System level)
-SYSTEM_SERVICES=(
-    "fstrim.timer"
-    "bluetooth.service"
-    "chronyd.service"
+DISTRO_PACKAGES_ADMIN=(
+    iproute iputils bind-utils traceroute mtr nmap-ncat
+    procps-ng psmisc lsof pciutils usbutils smartmontools
+    htop btop iotop tmux ripgrep fd-find bat fzf ncdu duf eza zoxide whois nmap
 )
-
-# Systemd services (User level)
-USER_SERVICES=()
-
-# Filter official packages using dnf info / repoquery
-get_valid_packages() {
-    local valid=()
-    for pkg in "$@"; do
-        if dnf info "$pkg" &>/dev/null; then
-            valid+=("$pkg")
-        else
-            msg_warn "Package '$pkg' was not found in repositories. Skipping..." >&2
-        fi
-    done
-    echo "${valid[@]}"
-}
-
-install_system_packages() {
-    if [ ${#UPDATE_CMD[@]} -gt 0 ]; then
-        msg_info "Updating repository metadata..."
-        "${UPDATE_CMD[@]}" || return 1
-    fi
-
-    if [ ${#UPGRADE_CMD[@]} -gt 0 ]; then
-        msg_info "Upgrading system packages..."
-        "${UPGRADE_CMD[@]}" &>/dev/null
-    fi
-
-    # Merge GUI packages if a desktop environment is detected
-    if ! is_server_environment; then
-        msg_info "Desktop environment detected. Adding GUI packages..."
-        PACKAGES+=("${GUI_PACKAGES[@]}")
-    fi
-
-    if [ ${#PACKAGES[@]} -gt 0 ]; then
-        msg_info "Filtering available packages..."
-        read -r -a VALID_PACKAGES <<< "$(get_valid_packages "${PACKAGES[@]}")"
-
-        if [ ${#VALID_PACKAGES[@]} -gt 0 ] && [ -n "${VALID_PACKAGES[0]:-}" ]; then
-            msg_info "Installing ${#VALID_PACKAGES[@]} valid packages..."
-            if "${INSTALL_CMD[@]}" "${VALID_PACKAGES[@]}"; then
-                msg_success "All packages installed successfully!"
-            else
-                msg_error "An error happened installing one or more packages."
-                return 1
-            fi
-        else
-            msg_warn "No valid packages available to install."
-        fi
-    fi
-
-    if [ ${#CLEANUP_CMD[@]} -gt 0 ]; then
-        msg_info "Cleaning orphan packages..."
-        "${CLEANUP_CMD[@]}" &> /dev/null || true
-    fi
-}
-
-enable_systemd_services() {
-    msg_info "Enabling system-level services..."
-
-    for service in "${SYSTEM_SERVICES[@]}"; do
-        if systemctl is-active --quiet "$service" 2>/dev/null || systemctl is-enabled --quiet "$service" 2>/dev/null; then
-            msg_info "Service '${service}' is already active/enabled."
-        else
-            if systemctl enable --now "$service" &>/dev/null; then
-                msg_success "Enabled system service: ${service}"
-            else
-                msg_error "Failed to enable system service: ${service}"
-            fi
-        fi
-    done
-
-    if [ ${#USER_SERVICES[@]} -gt 0 ]; then
-        msg_info "Enabling user-level services for ${TARGET_USER}..."
-        local target_uid
-        target_uid=$(id -u "$TARGET_USER")
-
-        for user_service in "${USER_SERVICES[@]}"; do
-            if sudo -u "$TARGET_USER" XDG_RUNTIME_DIR="/run/user/${target_uid}" systemctl --user enable "$user_service" &>/dev/null; then
-                msg_success "Enabled user service: ${user_service}"
-            else
-                msg_error "Failed to enable user service: ${user_service}"
-            fi
-        done
-    fi
-}
-
-msg_info "Preparing FEDORA environment for user: ${TARGET_USER} (${TARGET_HOME})..."
-install_system_packages
-enable_systemd_services
+DISTRO_PACKAGES_DESKTOP=(
+    xclip wl-clipboard libnotify
+)
+DISTRO_PACKAGES_SECURITY=(
+    nftables firewalld fail2ban lynis clamav
+)
+DISTRO_PACKAGES_PRIVACY=(
+    tor torsocks
+)
