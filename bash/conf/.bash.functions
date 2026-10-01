@@ -1,6 +1,15 @@
-# ~/.bash.functions - portable developer and sysadmin helpers.
+# ~/.bash.functions - functions intentionally compatible with Bash and Zsh.
 
 _dot_has() { command -v "$1" >/dev/null 2>&1; }
+
+_dot_lower() { printf '%s' "$1" | tr '[:upper:]' '[:lower:]'; }
+
+_dot_bat() {
+    if _dot_has bat; then printf '%s' bat
+    elif _dot_has batcat; then printf '%s' batcat
+    else return 1
+    fi
+}
 
 _copy_to_clipboard() {
     if _dot_has wl-copy; then
@@ -17,10 +26,11 @@ _copy_to_clipboard() {
 
 extract() {
     (($#)) || { printf 'Usage: extract <archive> [...]\n' >&2; return 2; }
-    local archive rc=0
+    local archive lower rc=0
     for archive in "$@"; do
         [[ -f "$archive" ]] || { printf 'Not a file: %s\n' "$archive" >&2; rc=1; continue; }
-        case "${archive,,}" in
+        lower="$(_dot_lower "$archive")"
+        case "$lower" in
             *.tar.gz|*.tgz) tar -xzf "$archive" || rc=1 ;;
             *.tar.bz2|*.tbz2) tar -xjf "$archive" || rc=1 ;;
             *.tar.xz|*.txz) tar -xJf "$archive" || rc=1 ;;
@@ -64,13 +74,68 @@ gitroot() {
     cd -- "$root" || return
 }
 
+pretty() {
+    (($#)) || { printf 'Usage: pretty <file> [...]\n' >&2; return 2; }
+    local bat_cmd=""
+    bat_cmd="$(_dot_bat 2>/dev/null || true)"
+    if [[ -n "$bat_cmd" ]]; then
+        "$bat_cmd" --paging=always --style=numbers,changes,header --color=always -- "$@"
+    else
+        ${PAGER:-less} -FRX -- "$@"
+    fi
+}
+
 ftext() {
     (($#)) || { printf 'Usage: ftext <pattern> [path]\n' >&2; return 2; }
     local pattern="$1" path="${2:-.}"
     if _dot_has rg; then
-        rg --smart-case --line-number --heading --color=always -- "$pattern" "$path" | ${PAGER:-less} -R
+        rg --smart-case --hidden --glob '!.git/*' --line-number --heading --color=always -- "$pattern" "$path" | ${PAGER:-less} -R
     else
         grep -RIn --color=always --exclude-dir=.git -- "$pattern" "$path" | ${PAGER:-less} -R
+    fi
+}
+
+fcd() {
+    _dot_has fzf || { printf 'fzf is required.\n' >&2; return 1; }
+    local dir=""
+    if _dot_has fd; then
+        dir="$(fd --type d --hidden --exclude .git . "${1:-.}" 2>/dev/null | fzf --height=70% --reverse --prompt='cd> ')"
+    elif _dot_has fdfind; then
+        dir="$(fdfind --type d --hidden --exclude .git . "${1:-.}" 2>/dev/null | fzf --height=70% --reverse --prompt='cd> ')"
+    else
+        dir="$(find "${1:-.}" -type d -not -path '*/.git/*' 2>/dev/null | fzf --height=70% --reverse --prompt='cd> ')"
+    fi
+    [[ -n "$dir" ]] && cd -- "$dir"
+}
+
+fpreview() {
+    _dot_has fzf || { printf 'fzf is required.\n' >&2; return 1; }
+    local bat_cmd="" file=""
+    bat_cmd="$(_dot_bat 2>/dev/null || true)"
+    if _dot_has rg; then
+        if [[ -n "$bat_cmd" ]]; then
+            file="$(rg --files --hidden --glob '!.git/*' | fzf --height=80% --reverse --preview "$bat_cmd --style=numbers --color=always --line-range :400 {} 2>/dev/null")"
+        else
+            file="$(rg --files --hidden --glob '!.git/*' | fzf --height=80% --reverse)"
+        fi
+    else
+        file="$(find . -type f -not -path '*/.git/*' 2>/dev/null | fzf --height=80% --reverse)"
+    fi
+    [[ -n "$file" ]] && pretty "$file"
+}
+
+hgrep() {
+    local query="${1:-}"
+    if _dot_has fzf; then
+        if [[ -n "$query" ]]; then
+            fc -rl 1 2>/dev/null | fzf --query "$query" --tac --no-sort
+        else
+            fc -rl 1 2>/dev/null | fzf --tac --no-sort
+        fi
+    elif _dot_has rg; then
+        fc -rl 1 2>/dev/null | rg --smart-case -- "$query"
+    else
+        fc -rl 1 2>/dev/null | grep -i -- "$query"
     fi
 }
 
@@ -163,10 +228,10 @@ genpass() {
     local length="${1:-24}"
     [[ "$length" =~ ^[0-9]+$ ]] && (( length >= 8 && length <= 256 )) || { printf 'Usage: genpass [8-256]\n' >&2; return 2; }
     _dot_has openssl || { printf 'openssl is required.\n' >&2; return 1; }
-    # Hex avoids SIGPIPE-prone filtering pipelines and remains cryptographically random.
-    local bytes=$(( (length + 1) / 2 )) out
+    local bytes out
+    bytes=$(( (length + 1) / 2 ))
     out="$(openssl rand -hex "$bytes")" || return 1
-    printf '%s\n' "${out:0:length}"
+    printf '%.*s\n' "$length" "$out"
 }
 
 genpassphrase() {
@@ -184,7 +249,6 @@ mkvenv() {
     local dir="${1:-.venv}"
     _dot_has python3 || { printf 'python3 is required.\n' >&2; return 1; }
     python3 -m venv "$dir" || return 1
-    # shellcheck disable=SC1090
     . "$dir/bin/activate"
 }
 

@@ -20,6 +20,18 @@ TASK_RESULTS=()
 
 command_exists() { command -v "$1" >/dev/null 2>&1; }
 
+ensure_target_dir() {
+    local dir="$1" mode="${2:-0755}" existed=0
+    [[ -d "$dir" ]] && existed=1
+    mkdir -p "$dir" || return 1
+    if (( existed == 0 )); then
+        chmod "$mode" "$dir" 2>/dev/null || true
+    fi
+    if (( EUID == 0 )) && [[ -n "${TARGET_USER:-}" ]]; then
+        chown "$TARGET_USER:${TARGET_GROUP:-$(id -gn "$TARGET_USER" 2>/dev/null || printf '%s' "$TARGET_USER")}" "$dir" 2>/dev/null || true
+    fi
+}
+
 ui_has_tty() {
     [[ ( -t 0 || -t 1 || -t 2 ) && -r /dev/tty && -w /dev/tty ]]
 }
@@ -42,39 +54,84 @@ ui_color_init() {
 }
 ui_color_init
 
-UI_RULE="----------------------------------------------------------------------------------------"
+UI_RULE="========================================================================================"
+UI_THIN="----------------------------------------------------------------------------------------"
 
-msg_info()    { printf '%b[INFO]%b %s\n' "$C_CYAN" "$C_RESET" "$*" >&2; }
-msg_success() { printf '%b[ OK ]%b %s\n' "$C_GREEN" "$C_RESET" "$*" >&2; }
-msg_warn()    { printf '%b[WARN]%b %s\n' "$C_YELLOW" "$C_RESET" "$*" >&2; }
-msg_error()   { printf '%b[FAIL]%b %s\n' "$C_RED" "$C_RESET" "$*" >&2; }
-msg_skip()    { printf '%b[SKIP]%b %s\n' "$C_DIM" "$C_RESET" "$*" >&2; }
-msg_exec()    { printf '%b[EXEC]%b %s\n' "$C_MAGENTA" "$C_RESET" "$*" >&2; }
+msg_info()    { printf '%b[INFO]%b %s
+' "$C_CYAN" "$C_RESET" "$*" >&2; }
+msg_success() { printf '%b[ OK ]%b %s
+' "$C_GREEN" "$C_RESET" "$*" >&2; }
+msg_warn()    { printf '%b[WARN]%b %s
+' "$C_YELLOW" "$C_RESET" "$*" >&2; }
+msg_error()   { printf '%b[FAIL]%b %s
+' "$C_RED" "$C_RESET" "$*" >&2; }
+msg_skip()    { printf '%b[SKIP]%b %s
+' "$C_DIM" "$C_RESET" "$*" >&2; }
+msg_exec()    { printf '%b[EXEC]%b %s
+' "$C_MAGENTA" "$C_RESET" "$*" >&2; }
 
-ui_rule() { printf '%b%s%b\n' "$C_DIM" "$UI_RULE" "$C_RESET"; }
+ui_rule() { printf '%b%s%b
+' "$C_DIM" "$UI_THIN" "$C_RESET"; }
 
 ui_clear() {
     [[ -t 1 ]] && command_exists clear && clear 2>/dev/null || true
 }
 
+ui_brand() {
+    local product="${1:-WORKSTATION CONTROL PLANE}"
+    printf '%b' "$C_CYAN"
+    cat <<'EOF_BRAND'
+   ____        __  _____ __         
+  / __ \____  / /_/ __(_) /__  _____
+ / / / / __ \/ __/ /_/ / / _ \/ ___/
+/ /_/ / /_/ / /_/ __/ / /  __(__  ) 
+\____/\____/\__/_/ /_/_/\___/____/  
+EOF_BRAND
+    printf '%b' "$C_RESET"
+    printf '%b  %s%b
+' "$C_BOLD" "$product" "$C_RESET"
+}
+
 ui_header() {
-    local title="$1" subtitle="${2:-}"
+    local title="$1" subtitle="${2:-}" product="${3:-WORKSTATION CONTROL PLANE}"
     ui_clear
-    printf '%b%b DOTFILES WORKSTATION CONTROL PLANE%b\n' "$C_BOLD" "$C_CYAN" "$C_RESET"
-    ui_rule
-    printf '  %-18s %s\n' "Host" "$(hostname 2>/dev/null || printf unknown)"
-    printf '  %-18s %s\n' "OS family" "${OS_FAMILY:-unknown}"
-    printf '  %-18s %s\n' "Target user" "${TARGET_USER:-unknown}"
-    printf '  %-18s %s\n' "Target home" "${TARGET_HOME:-unknown}"
-    ui_rule
-    printf '%b%s%b\n' "$C_BOLD" "$title" "$C_RESET"
-    [[ -n "$subtitle" ]] && printf '%b%s%b\n' "$C_DIM" "$subtitle" "$C_RESET"
-    printf '\n'
+    ui_brand "$product"
+    printf '%b%s%b
+' "$C_DIM" "$UI_RULE" "$C_RESET"
+    printf '  %-14s %s
+' "Host" "$(hostname 2>/dev/null || printf unknown)"
+    printf '  %-14s %s
+' "Platform" "${OS_PRETTY:-Linux} (${OS_FAMILY:-unknown})"
+    printf '  %-14s %s
+' "Target" "${TARGET_USER:-unknown} -> ${TARGET_HOME:-unknown}"
+    printf '  %-14s %s
+' "Login shell" "${TARGET_SHELL:-unknown}"
+    printf '%b%s%b
+' "$C_DIM" "$UI_RULE" "$C_RESET"
+    printf '%b%s%b
+' "$C_BOLD" "$title" "$C_RESET"
+    [[ -n "$subtitle" ]] && printf '%b%s%b
+' "$C_DIM" "$subtitle" "$C_RESET"
+    printf '
+'
+}
+
+ui_section() {
+    local title="$1"
+    printf '
+%b-- %s %s%b
+' "$C_BOLD$C_WHITE" "$title" "$(printf '%*s' "$((68-${#title}))" '' | tr ' ' '-')" "$C_RESET"
 }
 
 ui_menu_item() {
-    local key="$1" title="$2" desc="${3:-}" colour="${4:-$C_CYAN}"
-    printf '  %b[%2s]%b  %b%-28s%b %b%s%b\n' "$C_DIM" "$key" "$C_RESET" "$colour" "$title" "$C_RESET" "$C_DIM" "$desc" "$C_RESET"
+    local key="$1" title="$2" desc="${3:-}" colour="${4:-$C_CYAN}" tag="${5:-}"
+    if [[ -n "$tag" ]]; then
+        printf '  %b[%2s]%b  %b%-25s%b %b%-10s%b %b%s%b
+' "$C_DIM" "$key" "$C_RESET" "$colour" "$title" "$C_RESET" "$C_BOLD" "$tag" "$C_RESET" "$C_DIM" "$desc" "$C_RESET"
+    else
+        printf '  %b[%2s]%b  %b%-25s%b %b%s%b
+' "$C_DIM" "$key" "$C_RESET" "$colour" "$title" "$C_RESET" "$C_DIM" "$desc" "$C_RESET"
+    fi
 }
 
 ui_pause() {
@@ -215,16 +272,45 @@ detect_distribution() {
 }
 
 resolve_target_user() {
-    TARGET_USER="${DOTFILES_TARGET_USER:-${SUDO_USER:-${USER:-}}}"
-    [[ -n "$TARGET_USER" ]] || TARGET_USER="$(id -un 2>/dev/null || printf root)"
+    local candidate="" repo_owner="" session_user=""
+
+    if [[ -n "${DOTFILES_TARGET_USER:-}" ]]; then
+        candidate="$DOTFILES_TARGET_USER"
+    elif [[ -n "${SUDO_USER:-}" && "${SUDO_USER:-root}" != "root" ]]; then
+        candidate="$SUDO_USER"
+    elif [[ -n "${PKEXEC_UID:-}" ]] && command_exists getent; then
+        candidate="$(getent passwd "$PKEXEC_UID" 2>/dev/null | awk -F: 'NR==1{print $1}')"
+    fi
+
+    # Root shells created with `sudo -i`/`su` often lose SUDO_USER. Prefer the
+    # non-root owner of the checkout, then the login session user, before root.
+    if [[ -z "$candidate" && ${EUID:-0} -eq 0 ]]; then
+        if [[ -n "${SCRIPT_DIR:-}" ]]; then
+            repo_owner="$(stat -c '%U' "$SCRIPT_DIR" 2>/dev/null || true)"
+            [[ -n "$repo_owner" && "$repo_owner" != "root" && "$repo_owner" != "UNKNOWN" ]] && candidate="$repo_owner"
+        fi
+        if [[ -z "$candidate" ]]; then
+            session_user="$(logname 2>/dev/null || true)"
+            [[ -n "$session_user" && "$session_user" != "root" ]] && candidate="$session_user"
+        fi
+    fi
+
+    [[ -n "$candidate" ]] || candidate="${USER:-$(id -un 2>/dev/null || printf root)}"
+    TARGET_USER="$candidate"
+
     if ! id "$TARGET_USER" >/dev/null 2>&1; then
-        msg_error "Target user '$TARGET_USER' does not exist."
+        msg_error "Target user '$TARGET_USER' does not exist. Use --user USER to select it explicitly."
         return 1
     fi
-    TARGET_HOME="$(getent passwd "$TARGET_USER" 2>/dev/null | awk -F: 'NR==1{print $6}')"
+
+    local passwd_entry=""
+    passwd_entry="$(getent passwd "$TARGET_USER" 2>/dev/null | head -n1 || true)"
+    TARGET_HOME="$(printf '%s' "$passwd_entry" | awk -F: '{print $6}')"
+    TARGET_SHELL="$(printf '%s' "$passwd_entry" | awk -F: '{print $7}')"
     [[ -n "$TARGET_HOME" ]] || TARGET_HOME="$( [[ "$TARGET_USER" == root ]] && printf /root || printf '/home/%s' "$TARGET_USER" )"
-    TARGET_GROUP="$(id -gn "$TARGET_USER" 2>/dev/null || printf "$TARGET_USER")"
-    export TARGET_USER TARGET_HOME TARGET_GROUP
+    [[ -n "$TARGET_SHELL" ]] || TARGET_SHELL="${SHELL:-/bin/bash}"
+    TARGET_GROUP="$(id -gn "$TARGET_USER" 2>/dev/null || printf '%s' "$TARGET_USER")"
+    export TARGET_USER TARGET_HOME TARGET_GROUP TARGET_SHELL
 }
 
 require_linux() {
@@ -309,7 +395,11 @@ install_packages() {
         return 0
     }
     msg_exec "Installing ${#VALID_PACKAGES[@]} package(s) from configured distribution repositories."
-    pkg_install "${VALID_PACKAGES[@]}"
+    if pkg_install "${VALID_PACKAGES[@]}"; then
+        hash -r 2>/dev/null || true
+        return 0
+    fi
+    return 1
 }
 
 package_group_install() {
@@ -325,7 +415,10 @@ backup_path() {
     [[ -e "$path" || -L "$path" ]] || return 0
     rel="${path#/}"
     dest="${DOTFILES_BACKUP_HOME}/${DOTFILES_RUN_ID}/${rel}"
+    ensure_target_dir "$DOTFILES_BACKUP_HOME" 0700 || return 1
+    ensure_target_dir "$DOTFILES_BACKUP_HOME/$DOTFILES_RUN_ID" 0700 || return 1
     mkdir -p "$(dirname "$dest")"
+    if (( EUID == 0 )); then chown "$TARGET_USER:$TARGET_GROUP" "$(dirname "$dest")" 2>/dev/null || true; fi
     cp -a -- "$path" "$dest"
     if (( EUID == 0 )) && [[ -n "${TARGET_USER:-}" && "${TARGET_USER:-root}" != root ]]; then
         chown -R "$TARGET_USER:${TARGET_GROUP:-$(id -gn "$TARGET_USER" 2>/dev/null || printf "$TARGET_USER")}" "$dest" 2>/dev/null || true
@@ -354,8 +447,18 @@ ensure_line() {
 }
 
 service_exists() {
+    local unit="$1" state=""
     command_exists systemctl || return 1
-    systemctl list-unit-files "$1" --no-legend 2>/dev/null | grep -q .
+    state="$(systemctl show -p LoadState --value "$unit" 2>/dev/null || true)"
+    [[ -n "$state" && "$state" != "not-found" ]]
+}
+
+service_active() {
+    command_exists systemctl && systemctl is-active --quiet "$1" 2>/dev/null
+}
+
+service_enabled() {
+    command_exists systemctl && systemctl is-enabled --quiet "$1" 2>/dev/null
 }
 
 safe_service_enable_now() {

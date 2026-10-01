@@ -13,7 +13,7 @@ SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" >/dev/null 2>&1 && pwd -
 # shellcheck source=lib/common.sh
 source "$SCRIPT_DIR/lib/common.sh"
 
-SCRIPT_VERSION="2.0.0-workstation-control-plane"
+SCRIPT_VERSION="2.1.0-shell-parity"
 OS_MODULE_LOADED=0
 
 usage() {
@@ -27,6 +27,7 @@ Usage:
   ./bash_setup.sh --full          all dotfiles modules, including Vim and optional desktop tools
   ./bash_setup.sh --status        read-only readiness/status view
   ./bash_setup.sh --hardening     open the system hardening assistant
+  ./bash_setup.sh --user USER     explicitly choose the account receiving dotfiles
   ./bash_setup.sh --no-color      disable ANSI colors
   ./bash_setup.sh --help
 
@@ -59,11 +60,18 @@ prepare_context() {
 }
 
 start_workstation_evidence() {
-    DOTFILES_RESULT_FILE="$DOTFILES_STATE_HOME/runs/$DOTFILES_RUN_ID/results.tsv"
-    mkdir -p "$(dirname "$DOTFILES_RESULT_FILE")"
+    local run_dir="$DOTFILES_STATE_HOME/runs/$DOTFILES_RUN_ID"
+    # When the assistant is invoked through sudo it must not leave root-owned XDG
+    # directories behind in the target account.
+    ensure_target_dir "$TARGET_HOME/.local" 0755 || return 1
+    ensure_target_dir "$TARGET_HOME/.local/state" 0755 || return 1
+    ensure_target_dir "$DOTFILES_STATE_HOME" 0700 || return 1
+    ensure_target_dir "$DOTFILES_STATE_HOME/runs" 0700 || return 1
+    ensure_target_dir "$run_dir" 0700 || return 1
+    DOTFILES_RESULT_FILE="$run_dir/results.tsv"
     : >"$DOTFILES_RESULT_FILE"
     chmod 0600 "$DOTFILES_RESULT_FILE"
-    (( EUID == 0 )) && chown "$TARGET_USER:$TARGET_GROUP" "$DOTFILES_RESULT_FILE" "$(dirname "$DOTFILES_RESULT_FILE")" 2>/dev/null || true
+    (( EUID == 0 )) && chown "$TARGET_USER:$TARGET_GROUP" "$DOTFILES_RESULT_FILE" 2>/dev/null || true
 }
 
 require_package_provider() {
@@ -73,13 +81,97 @@ require_package_provider() {
     }
 }
 
+ensure_user_shim() {
+    local name="$1" target="$2" bin_dir="$TARGET_HOME/.local/bin" link="$bin_dir/$name"
+    [[ -n "$target" && -x "$target" ]] || return 0
+    mkdir -p "$bin_dir"
+    (( EUID == 0 )) && chown "$TARGET_USER:$TARGET_GROUP" "$TARGET_HOME/.local" "$bin_dir" 2>/dev/null || true
+    if [[ -L "$link" && "$(readlink -f "$link" 2>/dev/null || true)" == "$(readlink -f "$target" 2>/dev/null || printf '%s' "$target")" ]]; then
+        return 0
+    fi
+    [[ -e "$link" || -L "$link" ]] && backup_path "$link"
+    rm -f -- "$link"
+    ln -s -- "$target" "$link" || return 1
+    (( EUID == 0 )) && chown -h "$TARGET_USER:$TARGET_GROUP" "$link" 2>/dev/null || true
+    msg_info "Compatibility shim: $link -> $target"
+}
+
+configure_command_shims() {
+    local target=""
+    if command_exists bat; then
+        target="$(command -v bat)"
+    elif command_exists batcat; then
+        target="$(command -v batcat)"
+    fi
+    [[ -n "$target" ]] && ensure_user_shim bat "$target" || true
+
+    target=""
+    if command_exists fd; then
+        target="$(command -v fd)"
+    elif command_exists fdfind; then
+        target="$(command -v fdfind)"
+    fi
+    [[ -n "$target" ]] && ensure_user_shim fd "$target" || true
+
+    # fzf has a stable binary name, but keeping it in ~/.local/bin preserves the
+    # old self-contained workstation behaviour and makes PATH resolution uniform.
+    if command_exists fzf; then
+        target="$(command -v fzf)"
+        [[ "$target" != "$TARGET_HOME/.local/bin/fzf" ]] && ensure_user_shim fzf "$target" || true
+    fi
+}
+
+configure_zsh_layer() {
+    local src="$SCRIPT_DIR/zsh/conf/dotfiles.zsh"
+    local cfg_dir="$TARGET_HOME/.config/dotfiles"
+    local managed="$cfg_dir/zsh.zsh"
+    local zshrc="$TARGET_HOME/.zshrc"
+    local include='[[ -r "$HOME/.config/dotfiles/zsh.zsh" ]] && source "$HOME/.config/dotfiles/zsh.zsh"'
+
+    [[ -f "$src" ]] || { msg_error "Missing Zsh managed layer: $src"; return 1; }
+    mkdir -p "$cfg_dir"
+    (( EUID == 0 )) && chown "$TARGET_USER:$TARGET_GROUP" "$TARGET_HOME/.config" "$cfg_dir" 2>/dev/null || true
+    copy_with_backup "$src" "$managed" "$TARGET_USER" 0644 || return 1
+
+    if [[ -e "$zshrc" || -L "$zshrc" ]]; then
+        backup_path "$zshrc" || return 1
+        if ! grep -Fqx -- "$include" "$zshrc" 2>/dev/null; then
+            printf '
+# Dotfiles managed compatibility layer.
+%s
+' "$include" >>"$zshrc" || return 1
+        fi
+    else
+        printf '# User Zsh configuration
+%s
+' "$include" >"$zshrc" || return 1
+        chmod 0644 "$zshrc"
+        (( EUID == 0 )) && chown "$TARGET_USER:$TARGET_GROUP" "$zshrc" 2>/dev/null || true
+    fi
+
+    msg_success "Zsh integration enabled without replacing the existing ~/.zshrc."
+}
+
 configure_shell() {
     local src="$SCRIPT_DIR/bash/conf" f
     [[ -d "$src" ]] || { msg_error "Missing Bash configuration directory: $src"; return 1; }
+
+    # Always deploy the historical Bash files. Apart from Bash compatibility,
+    # .bash.aliases/.bash.functions are the shared helper library used by Zsh.
     for f in .bashrc .bash.aliases .bash.functions; do
         copy_with_backup "$src/$f" "$TARGET_HOME/$f" "$TARGET_USER" 0644 || return 1
+        [[ -f "$TARGET_HOME/$f" ]] || { msg_error "Post-copy verification failed: $TARGET_HOME/$f"; return 1; }
     done
-    msg_info "Previous files, when present, were copied below: $DOTFILES_BACKUP_HOME/$DOTFILES_RUN_ID"
+
+    configure_command_shims || msg_warn "One or more optional command shims could not be created."
+
+    if [[ "${TARGET_SHELL##*/}" == "zsh" ]] || command_exists zsh; then
+        configure_zsh_layer || return 1
+    fi
+
+    msg_success "Shell files deployed to $TARGET_HOME (.bashrc, .bash.aliases, .bash.functions)."
+    msg_info "Login shell detected: $TARGET_SHELL"
+    msg_info "Backups, when needed: $DOTFILES_BACKUP_HOME/$DOTFILES_RUN_ID"
 }
 
 configure_git() {
@@ -174,12 +266,14 @@ configure_commands() {
         chmod 0755 "$dest/$name"
         (( EUID == 0 )) && chown "$TARGET_USER:$TARGET_GROUP" "$dest/$name" 2>/dev/null || true
     done < <(find "$src_root" -type f -name '*.sh' -print0)
+    configure_command_shims || true
 }
 
 install_group() {
     local group="$1"
     require_package_provider || return 1
-    package_group_install "$group"
+    package_group_install "$group" || return 1
+    [[ "$group" == "admin" ]] && configure_command_shims || true
 }
 
 install_desktop_group() {
@@ -207,22 +301,53 @@ configure_privacy_tools() {
 }
 
 status_report() {
-    ui_header "WORKSTATION READINESS" "Read-only inventory; missing optional tools are not failures"
-    printf '  %-24s %s\n' "Distribution" "${OS_PRETTY:-unknown}"
-    printf '  %-24s %s\n' "Package provider" "${DISTRO_PACKAGE_MANAGER:-unavailable}"
-    printf '  %-24s %s\n' "Desktop session" "$(is_desktop_environment && printf detected || printf not-detected)"
-    printf '  %-24s %s\n' "WSL" "$(is_wsl && printf yes || printf no)"
-    printf '  %-24s %s\n' "Container" "$(is_container && printf yes || printf no)"
-    printf '\n'
-    local cmd
-    for cmd in git ssh vim python3 gcc make jq rg fzf bat fd tmux btop shellcheck; do
-        if command_exists "$cmd"; then
-            printf '  %b[ OK ]%b %-18s %s\n' "$C_GREEN" "$C_RESET" "$cmd" "$(command -v "$cmd")"
+    ui_header "WORKSTATION READINESS" "Read-only inventory; missing optional tools are not failures" "WORKSTATION CONTROL PLANE"
+    printf '  %-24s %s
+' "Distribution" "${OS_PRETTY:-unknown}"
+    printf '  %-24s %s
+' "Package provider" "${DISTRO_PACKAGE_MANAGER:-unavailable}"
+    printf '  %-24s %s
+' "Target user" "$TARGET_USER"
+    printf '  %-24s %s
+' "Login shell" "$TARGET_SHELL"
+    printf '  %-24s %s
+' "Desktop session" "$(is_desktop_environment && printf detected || printf not-detected)"
+    printf '  %-24s %s
+' "WSL" "$(is_wsl && printf yes || printf no)"
+    printf '  %-24s %s
+' "Container" "$(is_container && printf yes || printf no)"
+
+    ui_section "Managed shell files"
+    local file
+    for file in .bashrc .bash.aliases .bash.functions .zshrc .config/dotfiles/zsh.zsh; do
+        if [[ -e "$TARGET_HOME/$file" ]]; then
+            printf '  %b[ OK ]%b %-30s %s
+' "$C_GREEN" "$C_RESET" "$file" "$TARGET_HOME/$file"
         else
-            printf '  %b[ -- ]%b %-18s optional/missing\n' "$C_DIM" "$C_RESET" "$cmd"
+            printf '  %b[ -- ]%b %-30s missing/not-managed
+' "$C_DIM" "$C_RESET" "$file"
         fi
     done
-    printf '\n  Backups: %s\n' "$DOTFILES_BACKUP_HOME"
+
+    ui_section "Developer / admin commands"
+    local cmd resolved
+    for cmd in git ssh vim python3 gcc make jq rg fzf bat fd tmux btop shellcheck; do
+        if [[ -x "$TARGET_HOME/.local/bin/$cmd" ]]; then
+            resolved="$TARGET_HOME/.local/bin/$cmd"
+        else
+            resolved="$(run_as_target env PATH="$TARGET_HOME/.local/bin:/usr/local/bin:/usr/bin:/bin:/usr/local/sbin:/usr/sbin:/sbin" sh -c "command -v '$cmd' 2>/dev/null" 2>/dev/null || true)"
+        fi
+        if [[ -n "$resolved" ]]; then
+            printf '  %b[ OK ]%b %-18s %s
+' "$C_GREEN" "$C_RESET" "$cmd" "$resolved"
+        else
+            printf '  %b[ -- ]%b %-18s optional/missing
+' "$C_DIM" "$C_RESET" "$cmd"
+        fi
+    done
+    printf '
+  Backups: %s
+' "$DOTFILES_BACKUP_HOME"
 }
 
 run_hardening_assistant() {
@@ -241,7 +366,7 @@ run_hardening_assistant() {
 
 profile_minimal() {
     run_task "Core distribution packages" install_group core
-    run_task "Bash environment" configure_shell
+    run_task "Shell environment (Bash/Zsh)" configure_shell
     run_task "Git and SSH client defaults" configure_git_ssh
     run_task "Portable custom commands" configure_commands
 }
@@ -251,7 +376,7 @@ profile_recommended() {
     run_task "Developer toolchain" install_group dev
     run_task "Sysadmin/diagnostic tools" install_group admin
     run_task "Desktop integration tools" install_desktop_group
-    run_task "Bash environment" configure_shell
+    run_task "Shell environment (Bash/Zsh)" configure_shell
     run_task "Git and SSH client defaults" configure_git_ssh
     run_task "Portable custom commands" configure_commands
 }
@@ -270,7 +395,7 @@ execute_option() {
         5|dev) run_task "Developer toolchain" install_group dev ;;
         6|admin) run_task "Sysadmin/diagnostic tools" install_group admin ;;
         7|desktop) run_task "Desktop integration tools" install_desktop_group ;;
-        8|bash|shell) run_task "Bash environment" configure_shell ;;
+        8|bash|shell) run_task "Shell environment (Bash/Zsh)" configure_shell ;;
         9|git|ssh) run_task "Git and SSH client defaults" configure_git_ssh ;;
         10|vim) run_task "Vim profile" configure_vim ;;
         11|commands|tools) run_task "Portable custom commands" configure_commands ;;
@@ -287,23 +412,27 @@ execute_option() {
 interactive_menu() {
     ui_has_tty || { msg_error "Interactive mode requires /dev/tty. Use --recommended/--minimal/--full/--status."; return 1; }
     while true; do
-        ui_header "WORKSTATION SETUP" "Select one or multiple entries (example: 5,6,8,9,11). Errors remain visible and the menu continues."
-        ui_menu_item "1" "Minimal profile" "Core packages + Bash + Git/SSH + local commands" "$C_GREEN"
-        ui_menu_item "2" "Recommended profile" "Developer + sysadmin workstation; does NOT apply Vim/hardening" "$C_GREEN"
-        ui_menu_item "3" "Full dotfiles profile" "Recommended + Vim configuration" "$C_YELLOW"
-        printf '\n'
-        ui_menu_item "4" "Core packages" "Portable baseline from configured official repositories"
+        ui_header "WORKSTATION SETUP" "Profiles are additive. Select one or multiple entries (example: 5,6,8,9,11)." "WORKSTATION CONTROL PLANE"
+        ui_section "Profiles"
+        ui_menu_item "1" "Minimal" "Core + shell + Git/SSH + local commands" "$C_GREEN" "SAFE"
+        ui_menu_item "2" "Recommended" "Developer/sysadmin workstation; Vim and hardening remain optional" "$C_GREEN" "DEFAULT"
+        ui_menu_item "3" "Full dotfiles" "Recommended + Vim configuration" "$C_YELLOW" "OPT-IN"
+
+        ui_section "Workstation modules"
+        ui_menu_item "4" "Core packages" "Portable official-repository baseline"
         ui_menu_item "5" "Developer toolchain" "Compiler/build/Python/ShellCheck/Git LFS"
-        ui_menu_item "6" "Sysadmin tools" "Network/process/storage diagnostics and terminal utilities"
-        ui_menu_item "7" "Desktop helpers" "Clipboard/notification integration when graphical desktop exists"
-        ui_menu_item "8" "Bash configuration" ".bashrc, aliases and functions"
-        ui_menu_item "9" "Git + SSH client" "Preserve personal config; add managed includes"
-        ui_menu_item "10" "Vim configuration" "Optional, pluginless, no network bootstrap" "$C_MAGENTA"
-        ui_menu_item "11" "Custom commands" "Copy repo utilities to ~/.local/bin"
-        ui_menu_item "12" "Privacy tools" "Optional Tor/torsocks packages; no forced service/config"
-        ui_menu_item "13" "System upgrade" "Explicit package-manager upgrade; never implicit" "$C_YELLOW"
-        ui_menu_item "14" "Readiness / status" "Read-only workstation inventory"
-        ui_menu_item "15" "Hardening workspace" "System security policy and rollback" "$C_RED"
+        ui_menu_item "6" "Sysadmin tools" "Network/process/storage + fzf/rg/bat/zoxide"
+        ui_menu_item "7" "Desktop helpers" "Clipboard and notification integration"
+        ui_menu_item "8" "Shell configuration" "Bash files + detected Zsh/Kali integration"
+        ui_menu_item "9" "Git + SSH client" "Managed includes; personal identity/keys preserved"
+        ui_menu_item "10" "Vim configuration" "Optional pluginless editor profile" "$C_MAGENTA" "OPT-IN"
+        ui_menu_item "11" "Custom commands" "Portable utilities in ~/.local/bin"
+        ui_menu_item "12" "Privacy tools" "Tor/torsocks packages only; no forced service"
+
+        ui_section "Operations"
+        ui_menu_item "13" "System upgrade" "Explicit package-manager upgrade" "$C_YELLOW" "CONFIRM"
+        ui_menu_item "14" "Readiness / status" "Read-only inventory and shell deployment check"
+        ui_menu_item "15" "Hardening workspace" "Security profiles, firewall and rollback" "$C_RED" "POLICY"
         ui_menu_item "0" "Exit" "Leave the assistant" "$C_RED"
         ui_rule
 
@@ -330,6 +459,12 @@ main() {
             --full|--all) mode="full" ;;
             --status|--audit) mode="status" ;;
             --hardening) mode="hardening" ;;
+            --user)
+                [[ $# -ge 2 ]] || { msg_error "--user requires an account name."; return 2; }
+                DOTFILES_TARGET_USER="$2"
+                shift
+                ;;
+            --user=*) DOTFILES_TARGET_USER="${1#*=}" ;;
             --no-color) DOTFILES_NO_COLOR=1; ui_color_init ;;
             --help|-h) usage; return 0 ;;
             *) msg_error "Unknown argument: $1"; usage >&2; return 2 ;;
@@ -349,9 +484,9 @@ main() {
         interactive) interactive_menu || rc=$? ;;
     esac
 
-    if (( rc == 0 )); then
+    if (( rc == 0 && TASK_PASS > 0 )) && [[ "$mode" != "status" && "$mode" != "hardening" ]]; then
         printf '\n'
-        msg_info "Open a new shell (or run: exec bash) to activate a replaced ~/.bashrc."
+        msg_info "Open a new login shell (for example: exec ${TARGET_SHELL##*/} -l) to activate the managed shell layer."
     fi
     return "$rc"
 }

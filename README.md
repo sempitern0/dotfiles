@@ -1,38 +1,36 @@
 # dotfiles · Linux Workstation Control Plane
 
-A portable, opinionated Linux workstation configuration for developers, system administrators and security-minded power users.
+A portable, opinionated Linux workstation environment for developers, system administrators and security-minded power users.
 
-The repository is designed around a simple idea: a new desktop should become useful quickly **without turning the bootstrap script into a second package ecosystem**. Distribution repositories remain the source of software updates, personal configuration is preserved where practical, high-impact security changes are explicit, and every interactive workspace is usable without `fzf`, dialog, Python or a graphical session.
+The repository is intentionally built around distribution-maintained software, explicit configuration profiles and recoverable security changes. It is not a package-manager replacement and it does not assume that every workstation should receive the same editor, firewall, DNS policy or hardening level.
 
-## What this repository configures
-
-The project has two entry points:
+## Entry points
 
 | Assistant | Scope | Privileges |
 | --- | --- | --- |
-| `bash_setup.sh` | Developer/sysadmin packages, Bash, Git, SSH client, optional Vim and command-line utilities | Runs as the user; asks for `sudo` only for package operations |
-| `hardening_setup.sh` | Host firewall, kernel/sysctl baseline, SSH server policy, security updates, Fail2Ban, optional DNS/USB/threat tooling and rollback | Root / `sudo` |
+| `bash_setup.sh` | Packages, Bash/Zsh, aliases/functions, Git, SSH client, optional Vim and local utilities | User context; requests `sudo` only for package operations |
+| `hardening_setup.sh` | Firewall, sysctl baseline, SSH server policy, security updates, Fail2Ban, optional DNS/USB/threat tooling and recovery | Root / `sudo` |
 
-Both assistants are interactive but also expose direct modes for repeatable provisioning.
+Both control planes support interactive menus and direct modes suitable for repeatable provisioning.
 
 ## Supported Linux families
 
-The common control plane targets the major package-management families rather than individual distributions:
+The project targets package-management families rather than hard-coding individual releases:
 
 | Family | Examples | Package source policy |
 | --- | --- | --- |
-| Debian | Debian, Ubuntu and close derivatives | Configured APT repositories |
+| Debian | Debian, Ubuntu, Kali and close derivatives | Configured APT repositories |
 | Arch | Arch and close derivatives | Official pacman repositories only |
 | Fedora / RHEL-like | Fedora and compatible RPM systems | Configured DNF repositories |
-| openSUSE / SUSE-like | openSUSE Leap/Tumbleweed and compatible systems | Configured Zypper repositories |
+| openSUSE / SUSE-like | Leap, Tumbleweed and compatible systems | Configured Zypper repositories |
 
-Package availability is checked at runtime. A missing optional package is skipped instead of aborting the entire setup.
+Package availability is checked at runtime. Optional packages that do not exist in the configured official repositories are skipped rather than replaced with random third-party installers.
 
-The assistants do **not** automatically add PPAs, COPRs, AUR helpers, third-party repositories, language-specific installers or GitHub release binaries. This keeps updates inside the operating system's normal security lifecycle.
+The bootstrap does **not** automatically add PPAs, COPRs, AUR helpers, external RPM repositories, GitHub release binaries or `curl | sh` installers.
 
 ## Quick start
 
-Clone the repository and run the workstation assistant as your normal user:
+Run the workstation assistant from a normal user checkout:
 
 ```bash
 git clone https://github.com/sempitern0/dotfiles.git
@@ -40,39 +38,36 @@ cd dotfiles
 ./bash_setup.sh
 ```
 
-The recommended non-interactive-equivalent profile is:
+Recommended baseline:
 
 ```bash
 ./bash_setup.sh --recommended
 ```
 
-It installs the portable core/developer/sysadmin package groups, desktop integration packages when a graphical session is detected, and then deploys Bash, Git/SSH client defaults and the repository utilities.
-
-**It deliberately does not replace your Vim configuration and does not apply system hardening.**
-
-Other useful entry points:
+Other useful modes:
 
 ```bash
 ./bash_setup.sh --minimal
 ./bash_setup.sh --full
 ./bash_setup.sh --status
+./bash_setup.sh --user alice --recommended
 sudo ./hardening_setup.sh --audit
 sudo ./hardening_setup.sh --recommended
 ```
 
-`--full` means the complete *dotfiles* profile, including Vim. It does not silently opt the machine into strict hardening controls.
+`--full` means the complete dotfiles profile, including Vim. It does not silently opt the machine into strict hardening controls.
 
 ## Workstation profiles
 
 ### Minimal
 
-Useful when opening a fresh VM, lab machine or temporary administration workstation:
+Suitable for a temporary VM, lab machine or fresh administration host:
 
 ```text
-Core distribution packages
-Bash configuration
+Core official packages
+Shell environment
 Git + SSH client defaults
-Portable repository utilities
+Portable commands
 ```
 
 ### Recommended
@@ -81,71 +76,116 @@ The normal developer/sysadmin workstation profile:
 
 ```text
 Minimal
-+ compiler / build toolchain
++ compiler/build toolchain
 + Python development baseline
-+ Git LFS / ShellCheck where available
-+ network, process and storage diagnostics
-+ terminal productivity tools
++ network/process/storage diagnostics
++ fzf, ripgrep, bat, zoxide and terminal productivity tools where available
 + desktop clipboard/notification integration when relevant
 ```
+
+Vim and system hardening remain optional.
 
 ### Full dotfiles
 
 Adds the repository's pluginless Vim profile to Recommended.
 
-The interactive menu can also execute any module independently, or multiple modules in one pass such as:
+The menu also supports multiple selections in one pass, for example:
 
 ```text
 5,6,8,9,11
 ```
 
-Failures in one selected module are reported in the run summary and do not terminate unrelated tasks.
+A recoverable failure in one module is shown in the run summary without terminating unrelated modules.
 
-## Bash environment
+## Bash and Zsh parity
 
-The Bash profile is designed to stay useful on both full desktops and stripped-down administration systems.
+The workstation layer supports both Bash and Zsh.
 
-It provides:
+The assistant always deploys the historical shared files:
 
-- XDG directory defaults without overriding values already chosen by the user;
-- a compact prompt with command status, host, path and Git branch;
-- history synchronization that appends and imports new history without clearing the active shell history;
-- optional Bash completion, fzf and zoxide integration only when installed;
-- safe TTY handling for `stty`, prompts and terminal formatting;
-- editor selection based on installed tools instead of forcing Vim;
-- aliases that avoid changing the semantics of core commands such as `mkdir`, `mktemp` or `sudo`.
+```text
+~/.bashrc
+~/.bash.aliases
+~/.bash.functions
+```
 
-Useful functions include `extract`, `backup`, `mkcd`, `up`, `gitroot`, `ftext`, `tre`, `myip`, `serve`, `fkill`, `genpass`, `genpassphrase`, `mkvenv`, `retry` and `sysupdate`.
+`.bash.aliases` and `.bash.functions` are deliberately written so the same helper library can be consumed by Zsh.
 
-A few intentional safety choices:
+When the account uses Zsh — notably fresh Kali desktop installations — the assistant additionally installs:
 
-- `serve` binds to `127.0.0.1` by default; use `serve --public` when LAN exposure is actually wanted;
-- `fkill` sends `TERM` by default; `fkill --force` is the explicit `KILL` path;
-- rsync aliases do not imply `--delete`;
-- no alias removes package-manager lock files;
-- password generation avoids SIGPIPE-sensitive filtering pipelines.
+```text
+~/.config/dotfiles/zsh.zsh
+```
+
+and adds one managed source line to the existing `~/.zshrc` instead of replacing the distribution/user configuration.
+
+This preserves Kali-specific Zsh configuration while adding the same aliases, functions, fzf integration and Git-aware prompt used by Bash.
+
+The target account is resolved from `--user`, `SUDO_USER`, the checkout owner or the login session. This avoids accidentally writing dotfiles to `/root` when the assistant is launched from `sudo -i` or another elevated shell.
+
+## Terminal ergonomics
+
+The managed shell layer includes:
+
+- `refresh` to reload the active Bash/Zsh configuration;
+- time, previous command status, `user@host`, current path and Git branch in the prompt;
+- a dirty Git marker when tracked/staged files differ;
+- Python virtual-environment indication;
+- shared history behaviour suitable for multiple terminals;
+- Bash completion where the distribution provides it;
+- fzf Ctrl-R reverse-history integration;
+- fzf Ctrl-T file selection and Alt-C directory selection where supported;
+- ripgrep-backed fzf file discovery for large repositories;
+- zoxide integration when installed;
+- TTY-safe `stty` handling.
+
+Useful helpers include:
+
+```text
+extract       backup       mkcd        up
+gitroot       ftext        fcd         fpreview
+hgrep         tre          pretty      myip
+serve         fkill        genpass     genpassphrase
+mkvenv        retry        sysupdate
+```
+
+`pretty file.txt` uses `bat`/`batcat` with line numbers and syntax colouring, falling back to `less` when unavailable.
+
+The bootstrap creates user-local compatibility shims in `~/.local/bin` when the distribution exposes common tools under another executable name:
+
+```text
+bat  -> batcat     # Debian/Kali when applicable
+fd   -> fdfind     # Debian/Kali when applicable
+fzf  -> system fzf binary
+```
+
+No core command such as `cat`, `mkdir`, `mktemp` or `sudo` is globally replaced with surprising semantics.
+
+## Aliases
+
+The alias set focuses on operations that remain predictable without extra parameters:
+
+- file listings (`ll`, `la`, `lt`, `tree`);
+- Git (`gs`, `gd`, `gds`, `gl`, `gla`, `gf`);
+- sockets and routes (`openports`, `listen`, `sockets`, `routes`, `netcon`);
+- journals and failed units (`logs`, `jerr`, `journalerr`, `failed`);
+- resource inspection (`topcpu`, `topmem`, `devices`, `mountedinfo`);
+- safe rsync convenience commands;
+- ripgrep shortcuts (`rgi`, `rgfiles`).
+
+Destructive or argument-sensitive behaviour is implemented as functions instead of aliases.
 
 ## Git and SSH client configuration
 
-The bootstrap no longer replaces `~/.gitconfig` wholesale.
-
-The managed Git policy is installed as:
+Git policy is installed as:
 
 ```text
 ~/.config/git/dotfiles.gitconfig
 ```
 
-and is added to the user's global Git configuration through `include.path`.
+and referenced from the user's global Git config with `include.path`. Personal identity remains outside the public repository.
 
-Machine-specific identity can remain private in:
-
-```text
-~/.config/git/local.gitconfig
-```
-
-The public template intentionally contains no fake `user.name` or `user.email` values.
-
-SSH follows the same model:
+SSH uses:
 
 ```text
 ~/.ssh/config
@@ -154,174 +194,184 @@ SSH follows the same model:
 ~/.ssh/conf.d/90-dotfiles.conf
 ```
 
-No private-key filename is assumed and existing host entries are preserved.
+Existing private keys and host definitions are preserved. No private-key filename is assumed.
 
 ## Vim is optional
 
-The Vim configuration is no longer a hidden dependency of the workstation profile.
+The supplied Vim profile is pluginless and performs no first-run network bootstrap.
 
-Choose it explicitly from the assistant or run the full dotfiles profile. The supplied `.vimrc` uses built-in Vim functionality and performs **no first-start network download**. There is no plugin manager bootstrap and no automatic `curl` of executable editor code.
+Choose it explicitly from the assistant or use `--full`. The Recommended profile does not touch Vim.
 
-The profile still provides persistent undo, recovery files, sensible indentation, built-in netrw navigation, split navigation, search behaviour and a compact statusline.
+## Portable commands
 
-## Repository commands
-
-Scripts under `bash/bin/` are copied to `~/.local/bin` rather than symlinked into the Git checkout. The commands therefore keep working if the repository is later moved or deleted.
-
-Current tools include:
+Scripts under `bash/bin/` are copied to `~/.local/bin`, so they keep working if the Git checkout is moved or deleted.
 
 | Command | Purpose |
 | --- | --- |
-| `authaudit` | Recent SSH and sudo authentication activity from journald |
-| `monitorport` | Wait for a TCP endpoint with interval/timeout control |
+| `authaudit` | Recent SSH and sudo authentication activity |
+| `monitorport` | Wait for a TCP endpoint with timeout/interval controls |
 | `portcheck` | Local listening socket inventory |
-| `openvpndown` | Explicit OpenVPN down-script kill switch for default-route interfaces |
+| `openvpndown` | OpenVPN down-script network kill switch |
 | `randomipzer` | Documentation/private IP generator for test fixtures |
-| `dominfo` | DNS, TLS and WHOIS domain inventory |
+| `dominfo` | DNS, TLS and WHOIS inventory |
 | `httpcheck` | HTTP redirect, latency and security-header inspection |
 | `sslcheck` | TLS certificate details and expiry thresholds |
-| `pstree-info` | Process details and process ancestry without forced sudo |
-
-`openvpndown` refuses casual direct execution because its purpose is to disconnect network paths when an OpenVPN tunnel drops.
+| `pstree-info` | Process ancestry/details without shadowing the system `pstree` |
 
 ## Hardening workspace
 
-The security assistant is aimed at **general-purpose Linux workstations**, not a blind CIS benchmark or a production server role.
+The hardening assistant is designed for a **general-purpose developer/admin workstation**, not a blind server benchmark.
 
-Start with a read-only review:
+Start with:
 
 ```bash
 sudo ./hardening_setup.sh --audit
 ```
 
-The recommended profile applies controls that are normally compatible with programming, containers, VPNs and desktop applications:
+Then, if appropriate:
 
 ```bash
 sudo ./hardening_setup.sh --recommended
 ```
 
-The balanced baseline includes:
+The interactive UI separates controls into:
 
-- source-route and redirect rejection;
-- loose reverse-path filtering suitable for common VPN/multihoming setups;
-- SYN cookie, martian logging and safe ICMP protections;
-- pointer, dmesg, ptrace, unprivileged BPF and protected-link controls;
-- a host firewall without opening HTTP/HTTPS inbound ports;
-- SSH hardening only when an SSH server already exists;
-- automatic security updates where a generic native policy is safe;
-- Fail2Ban only when an SSH server is present;
-- SELinux/AppArmor, time sync and network-facing service auditing.
+```text
+Start here
+  - read-only posture audit
+  - recommended workstation baseline
 
-The recommended baseline intentionally does **not** disable IPv6, ping, TCP SACK/timestamps, user namespaces, IP forwarding, Bluetooth, CUPS, Avahi or other desktop services globally.
+Baseline controls
+  - network sysctl
+  - kernel/memory sysctl
+  - firewall
+  - security updates
+  - conditional SSH hardening
+  - conditional Fail2Ban
+  - MAC/time/exposure audit
 
-Those decisions depend on workload and network role.
+Optional policy changes
+  - Quad9 DNS
+  - threat/audit tooling
 
-### High-impact modules
+High-impact controls
+  - SSH key-only authentication
+  - USBGuard
+  - /dev/shm noexec
+  - kernel protocol blacklist
 
-The interactive hardening menu keeps compatibility-sensitive controls separate:
+Recovery
+  - restore assistant snapshot
+```
 
-- SSH key-only authentication;
-- host-wide Quad9 DNS;
-- USBGuard;
-- `/dev/shm` `noexec` policy;
-- uncommon kernel-protocol blacklisting;
-- optional antivirus/audit tooling.
+The Recommended baseline does **not** apply Quad9, USBGuard, key-only SSH or strict `/dev/shm`/module policies.
 
-These controls either require literal confirmation or provide a compatibility warning before making changes.
+## Firewall policy
 
-## Firewall behaviour
+An already-active firewall frontend is preserved. If no frontend is installed, the automatic family defaults are:
 
-The firewall module detects an existing active frontend first.
+```text
+Debian / Ubuntu / Kali   -> UFW
+Fedora / RHEL-like       -> firewalld
+openSUSE / SUSE-like     -> firewalld
+Arch                     -> nftables
+```
 
-- UFW is hardened **without `ufw reset`**.
-- firewalld works on the interface's active/default zone and does not delete existing services or ports.
-- nftables refuses to replace a non-empty existing ruleset.
-- an existing remote SSH session has its destination port preserved before a new baseline becomes active.
-- TCP/80 and TCP/443 are never opened simply because this is a developer workstation.
+All are installed from the distribution's configured official repositories.
 
-This avoids the common failure mode where a generic hardening script silently destroys application, VPN, container or remote-administration firewall state.
+The firewall workspace can also explicitly select UFW, nftables or firewalld.
+
+Safety properties:
+
+- UFW is enabled without `ufw reset`;
+- firewalld keeps existing services/ports and operates on the active/default zone;
+- nftables refuses to overwrite an existing non-empty custom ruleset;
+- an active remote SSH port is preserved before a new baseline is enabled;
+- HTTP/HTTPS are not opened automatically;
+- successful execution verifies the selected frontend and loaded policy before reporting PASS.
+
+## SSH hardening
+
+The Recommended profile only modifies SSH when an SSH server is actually active/listening.
+
+An installed but disabled `sshd` is left untouched and is never started by the assistant.
+
+The explicit SSH module can prepare an already-installed server configuration, validates it with `sshd -t`, and reloads a service only when a reloadable `ssh.service`/`sshd.service` is active. Socket-activated or inactive SSH configurations no longer produce a spurious `ssh.service` failure.
+
+Key-only authentication is a separate high-impact action requiring an existing `authorized_keys` file and literal confirmation.
 
 ## DNS policy
 
-Quad9 is optional rather than part of the recommended profile.
+Quad9 remains optional. A host-wide resolver change can conflict with Active Directory, corporate split DNS, VPN search domains and local labs.
 
-A global resolver change can break:
+The module therefore requires explicit confirmation, uses NetworkManager/systemd-resolved where possible and does not make `/etc/resolv.conf` immutable.
 
-- Active Directory DNS;
-- corporate split DNS;
-- VPN-provided search domains;
-- lab networks and local service discovery.
+## Recovery
 
-The module therefore requires explicit confirmation, prefers `systemd-resolved` or NetworkManager, and never applies an immutable flag to `/etc/resolv.conf`.
-
-## Recovery and backups
-
-User configuration replacement creates timestamped copies below:
+User configuration backups are stored below:
 
 ```text
 ~/.local/state/dotfiles/backups/
 ```
 
-System hardening creates change-aware snapshots below:
+System hardening snapshots are stored below:
 
 ```text
 /var/backups/dotfiles-hardening/
 ```
 
-A hardening snapshot records only paths that the assistant is about to change plus the previous enabled/active state of managed systemd units. The Restore workspace can return those files and services to their recorded state.
+Hardening snapshots record assistant-managed paths and previous systemd unit states before modification. Package installation is not blindly reversed during restore; policy/configuration and service state are restored instead.
 
-This is intentionally different from a generic "restore defaults" routine: the assistant does not guess that Bluetooth, CUPS, Avahi, ModemManager or another unrelated service was enabled before hardening.
+## Error and stdin handling
 
-A system backup/snapshot outside this repository is still recommended before major OS upgrades or storage changes.
+The control planes intentionally do not use global `set -e` semantics.
 
-## Error handling and terminal behaviour
+Recoverable command failures are recorded and the interactive assistant continues. Confirmations read directly from `/dev/tty`, so piped stdin or command output cannot accidentally answer a destructive prompt.
 
-The control planes intentionally avoid global `set -e` behaviour.
+`Ctrl+C` exits cleanly and the assistants never delete APT, dpkg, pacman, DNF or Zypper lock files.
 
-In an interactive administrator tool, a missing optional package, empty `grep` result or unavailable service should not terminate an unrelated workflow. Each module returns a status, `run_task` records it, and the assistant continues when the failure is recoverable. If an external consumer deliberately closes stdout early (for example `... | head -1`), normal Unix `SIGPIPE` semantics are preserved rather than hidden.
+## Supply-chain policy
 
-Interactive input is read from `/dev/tty` rather than consuming pipeline/stdin data. This allows commands and subprocess output to be redirected without accidentally answering a destructive confirmation prompt.
+The baseline preference order is:
 
-`Ctrl+C` exits cleanly and **never removes APT, dpkg, pacman, DNF or Zypper lock files**.
+1. configured distribution repositories;
+2. a small portable package set;
+3. graceful degradation when an optional package is unavailable.
 
-## Package and supply-chain policy
+The assistants do not automatically bootstrap AUR helpers, add third-party repositories, download executable release packages from GitHub, install Vim plugins or invoke remote shell installers.
 
-The baseline intentionally favours:
+## Before applying to an existing workstation
 
-1. the distribution's configured repositories;
-2. a smaller portable package set;
-3. optional features that degrade cleanly when a package is unavailable.
-
-The assistants do not automatically install an AUR helper, add external repositories, download `.deb`/`.rpm` releases from GitHub, bootstrap Vim plugins, or pipe remote scripts into a shell.
-
-Language ecosystems such as Rust, Node.js, Go toolchains, SDKMAN or Python application managers are deliberately outside the generic bootstrap. Their lifecycle and version policy should be selected per developer/project rather than forced at machine provisioning time.
-
-## Before applying on an existing workstation
-
-Review the changed files and start with:
+Start read-only:
 
 ```bash
 ./bash_setup.sh --status
 sudo ./hardening_setup.sh --audit
 ```
 
-Then apply individual modules or the recommended profiles.
+For an account selected incorrectly by an elevated/root shell, specify it explicitly:
 
-For remote hosts, keep an independent console/recovery path available before changing firewall, DNS or SSH authentication policy.
+```bash
+sudo ./bash_setup.sh --user kali --recommended
+```
 
-## Design goals
+For remote hosts, keep an independent recovery path available before changing firewall, DNS or SSH authentication policy.
+
+## Design model
 
 ```text
 detect
+  -> resolve the target account and shell
   -> show scope
-  -> preserve existing state
-  -> apply only the selected module
+  -> preserve state
+  -> use the distribution's package provider
+  -> apply only the selected module/profile
   -> validate
-  -> report warnings without collapsing the whole assistant
-  -> keep a recovery path for system policy changes
+  -> report without collapsing unrelated workflows
+  -> retain a recovery path for system policy changes
 ```
 
-The repository is meant to be understandable and editable. Bash remains the orchestration layer; no framework or background agent is required.
+No framework, background agent or configuration-management runtime is required.
 
 ## License
 

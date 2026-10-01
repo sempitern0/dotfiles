@@ -1,12 +1,15 @@
-# ~/.bash.aliases - predictable shortcuts; destructive operations stay explicit.
+# ~/.bash.aliases - high-signal shortcuts for developer/sysadmin workflows.
+# Keep parameterized or destructive behaviour in functions instead of aliases.
 
 alias refresh='source ~/.bashrc'
 alias cls='clear'
 alias path='printf "%s\n" "$PATH" | tr ":" "\n"'
 alias now='date "+%Y-%m-%d %A %T %Z"'
 alias chmodx='chmod +x'
+alias qcompress='tar -cvzf'
+alias qdecompress='tar -xvzf'
 
-# Listings. Do not require icon fonts for the baseline experience.
+# Listings. Icon fonts are optional and never required.
 if command -v eza >/dev/null 2>&1; then
     alias ls='eza --group-directories-first'
     alias ll='eza -lhF --git --group-directories-first'
@@ -26,42 +29,68 @@ else
     alias lt='ls -lhSF --group-directories-first 2>/dev/null || ls -lhSF'
 fi
 
-# Git: short, conventional and argument-safe because these aliases do not need shell parsing.
+# Git.
 alias g='git'
 alias gs='git status --short --branch'
+alias gst='git status'
 alias gd='git diff'
 alias gds='git diff --staged'
 alias gl='git log --oneline --decorate --graph -20'
+alias gla='git log --oneline --decorate --graph --all -30'
 alias ga='git add'
 alias gc='git commit'
 alias gp='git push'
 alias gf='git fetch --all --prune --tags'
 
-# System / logs.
-alias ports='ss -lntup'
+# Network / sockets.
+alias openports='ss -tulpn'
+alias listen='ss -lntup'
 alias sockets='ss -tunap'
 alias routes='ip route show'
+alias netcon="ss -ntuH | awk '{print \$5}' | sed -E 's/^\[?([^]]+)\]?:[0-9]+$/\1/' | sort | uniq -c | sort -nr"
+alias curltime='curl -o /dev/null -sS -w "Connect: %{time_connect}s\nTTFB: %{time_starttransfer}s\nTotal: %{time_total}s\nStatus: %{http_code}\n"'
+
+# System / logs.
 alias failed='systemctl --failed --no-pager'
 alias ufailed='systemctl --user --failed --no-pager'
 alias jerr='journalctl -p warning..alert -b --no-pager'
+alias journalerr='journalctl -p err..alert -b --no-pager'
 alias jfollow='journalctl -f'
+alias logs='journalctl -xf'
 alias meminfo='free -h'
 alias devices='lsblk -o NAME,SIZE,FSTYPE,FSVER,LABEL,UUID,MOUNTPOINTS,MODEL'
-alias topcpu='ps aux --sort=-%cpu'
-alias topmem='ps aux --sort=-%mem'
+alias topcpu='ps aux --sort=-%cpu | head -n 16'
+alias topmem='ps aux --sort=-%mem | head -n 16'
 
 if command -v duf >/dev/null 2>&1; then
     alias disk='duf'
+    alias mountedinfo='duf'
 else
     alias disk='df -hT'
+    alias mountedinfo='df -hT'
 fi
 
-# Copy helpers. The mirror variants deliberately do NOT imply --delete.
+alias folders='du -h --max-depth=1 2>/dev/null | sort -hr'
+alias folderssort='du -sh ./* 2>/dev/null | sort -hr'
+alias totalusage='df -hl --total 2>/dev/null | tail -n 1'
+alias count='find . -type f | wc -l'
+
+# Copy helpers. The safe aliases deliberately never imply --delete.
 alias cpv='rsync -ah --info=progress2'
 alias rsync-copy='rsync -aHAXh --info=progress2'
 alias rsync-update='rsync -aHAXuh --info=progress2'
 
-# bat/batcat compatibility without creating a system-wide shim.
-if command -v batcat >/dev/null 2>&1 && ! command -v bat >/dev/null 2>&1; then
+# Pretty file viewing. Debian/Kali may expose bat as `batcat`; the assistant also
+# creates ~/.local/bin/bat when necessary.
+if command -v bat >/dev/null 2>&1; then
+    alias pretty='bat --paging=always --style=numbers,changes,header --color=always'
+elif command -v batcat >/dev/null 2>&1; then
     alias bat='batcat'
+    alias pretty='batcat --paging=always --style=numbers,changes,header --color=always'
+fi
+
+# ripgrep helpers: include hidden files but keep VCS internals out.
+if command -v rg >/dev/null 2>&1; then
+    alias rgi='rg --smart-case --hidden --glob "!.git/*"'
+    alias rgfiles='rg --files --hidden --glob "!.git/*"'
 fi

@@ -62,6 +62,8 @@ EOF_RULES
     chmod 0644 /etc/nftables.conf
     rm -f "$tmp"
     nft -f /etc/nftables.conf || return 1
-    service_exists nftables.service && systemctl enable nftables.service >/dev/null 2>&1 || true
+    if service_exists nftables.service; then
+        systemctl enable --now nftables.service >/dev/null 2>&1 || { msg_warn "nftables.service could not be enabled; runtime rules are still loaded."; }
+    fi
     nft list ruleset
 }

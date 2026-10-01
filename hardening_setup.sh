@@ -13,7 +13,8 @@ SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" >/dev/null 2>&1 && pwd -
 # shellcheck source=lib/common.sh
 source "$SCRIPT_DIR/lib/common.sh"
 
-SCRIPT_VERSION="2.0.0-balanced-workstation"
+SCRIPT_VERSION="2.1.0-workstation-hardening"
+DOTFILES_UI_PRODUCT="SECURITY & HARDENING CONTROL PLANE"
 ORIGINAL_ARGS=("$@")
 HARDENING_ROOT="/var/backups/dotfiles-hardening"
 HARDENING_SNAPSHOT=""
@@ -209,16 +210,15 @@ restore_snapshot_menu() {
 }
 
 security_audit() {
-    ui_header "SECURITY POSTURE" "Read-only workstation assessment"
+    ui_header "SECURITY POSTURE" "Read-only workstation assessment" "$DOTFILES_UI_PRODUCT"
     printf '  %-27s %s\n' "Kernel" "$(uname -r)"
     printf '  %-27s %s\n' "Distribution" "$OS_PRETTY"
     printf '  %-27s %s\n' "Package manager" "$DISTRO_PACKAGE_MANAGER"
     printf '  %-27s %s\n' "Secure Boot" "$(command_exists mokutil && mokutil --sb-state 2>/dev/null | head -n1 || printf unknown)"
     printf '  %-27s %s\n' "SELinux" "$(command_exists getenforce && getenforce 2>/dev/null || printf unavailable)"
     printf '  %-27s %s\n' "AppArmor" "$(command_exists aa-status && aa-status --enabled >/dev/null 2>&1 && printf enabled || printf unavailable/not-enabled)"
-    printf '  %-27s %s\n' "UFW" "$(command_exists ufw && ufw status 2>/dev/null | head -n1 || printf unavailable)"
-    printf '  %-27s %s\n' "firewalld" "$(systemctl is-active firewalld.service 2>/dev/null || printf inactive/unavailable)"
-    printf '  %-27s %s\n' "nftables service" "$(systemctl is-active nftables.service 2>/dev/null || printf inactive/unavailable)"
+    printf '\nFirewall frontends:\n'
+    firewall_status_summary
     printf '  %-27s %s\n' "Fail2Ban" "$(systemctl is-active fail2ban.service 2>/dev/null || printf inactive/unavailable)"
     printf '  %-27s %s\n' "SSH server" "$(command_exists sshd && printf installed || printf absent)"
     printf '\nKernel controls:\n'
@@ -268,50 +268,134 @@ apply_network_kernel_baseline() {
 }
 
 select_firewall_engine() {
-    if systemctl is-active --quiet firewalld.service 2>/dev/null; then printf firewalld; return; fi
-    if command_exists ufw && ufw status 2>/dev/null | grep -q '^Status: active'; then printf ufw; return; fi
-    if systemctl is-active --quiet nftables.service 2>/dev/null; then printf nftables; return; fi
-    if command_exists firewall-cmd; then printf firewalld; return; fi
-    if command_exists ufw; then printf ufw; return; fi
-    if command_exists nft; then printf nftables; return; fi
+    # Preserve an already-active frontend before selecting a family default.
+    service_active firewalld.service && command_exists firewall-cmd && { printf firewalld; return; }
+    command_exists ufw && ufw status 2>/dev/null | grep -q '^Status: active' && { printf ufw; return; }
+    service_active nftables.service && command_exists nft && { printf nftables; return; }
+
+    # If installed but inactive, preserve the administrator's existing choice.
+    command_exists firewall-cmd && { printf firewalld; return; }
+    command_exists ufw && { printf ufw; return; }
+    command_exists nft && { printf nftables; return; }
+
+    # Distro-family defaults use only official repositories.
     case "$OS_FAMILY" in
+        debian) printf ufw ;;
         fedora|opensuse) printf firewalld ;;
+        arch) printf nftables ;;
         *) printf nftables ;;
     esac
 }
 
+firewall_status_summary() {
+    printf '  %-18s %s
+' "UFW" "$(command_exists ufw && ufw status 2>/dev/null | head -n1 || printf not-installed)"
+    printf '  %-18s %s
+' "firewalld" "$(service_active firewalld.service && printf active || { command_exists firewall-cmd && printf installed-inactive || printf not-installed; })"
+    printf '  %-18s %s
+' "nftables" "$(service_active nftables.service && printf active || { command_exists nft && printf installed/runtime-unknown || printf not-installed; })"
+    if command_exists nft; then
+        local rules=""
+        rules="$(nft list ruleset 2>/dev/null || true)"
+        printf '  %-18s %s
+' "nft rules" "$( [[ -n "${rules//[[:space:]]/}" ]] && printf present || printf empty )"
+    fi
+}
+
 configure_firewall() {
-    local engine="${1:-}" module=""
-    [[ -n "$engine" ]] || engine="$(select_firewall_engine)"
-    msg_info "Selected firewall frontend: $engine"
+    local engine="${1:-}" module="" config_path="" unit="" binary=""
+    [[ -n "$engine" && "$engine" != "auto" ]] || engine="$(select_firewall_engine)"
+    msg_info "Selected firewall frontend: $engine (OS family: $OS_FAMILY)"
 
     case "$engine" in
         ufw)
-            hardening_record_service ufw.service
-            command_exists ufw || install_packages ufw || return 1
-            module="$SCRIPT_DIR/hardening/network/ufw.sh"
+            unit="ufw.service"; binary="ufw"; config_path="/etc/ufw"
             ;;
         firewalld)
-            hardening_record_service firewalld.service
-            command_exists firewall-cmd || install_packages firewalld || return 1
-            module="$SCRIPT_DIR/hardening/network/firewalld.sh"
+            unit="firewalld.service"; binary="firewall-cmd"; config_path="/etc/firewalld"
             ;;
         nftables)
-            hardening_record_service nftables.service
-            command_exists nft || install_packages nftables || return 1
-            module="$SCRIPT_DIR/hardening/network/nftables.sh"
+            unit="nftables.service"; binary="nft"; config_path="/etc/nftables.conf"
             ;;
         *) msg_error "Unsupported firewall engine: $engine"; return 1 ;;
     esac
+
+    # Snapshot the pre-package state. Installing a package may create configuration
+    # directories and even units before the module gets a chance to back them up.
+    hardening_backup_path "$config_path" || return 1
+    hardening_record_service "$unit"
+
+    if ! command_exists "$binary"; then
+        msg_info "Installing $engine from configured official repositories..."
+        install_packages "$engine" || return 1
+        hash -r 2>/dev/null || true
+    fi
+    command_exists "$binary" || { msg_error "$engine package completed but '$binary' is still unavailable in PATH."; return 1; }
+
+    module="$SCRIPT_DIR/hardening/network/${engine}.sh"
+    [[ -r "$module" ]] || { msg_error "Firewall module missing: $module"; return 1; }
     # shellcheck disable=SC1090
     source "$module" || return 1
-    "apply_${engine}_rules"
+    "apply_${engine}_rules" || return 1
+
+    printf '
+Firewall verification:
+'
+    firewall_status_summary
+
+    case "$engine" in
+        ufw) ufw status 2>/dev/null | grep -q '^Status: active' || { msg_error "UFW policy was not active after apply."; return 1; } ;;
+        firewalld) service_active firewalld.service || { msg_error "firewalld is not active after apply."; return 1; } ;;
+        nftables)
+            nft list ruleset 2>/dev/null | grep -q 'table inet dotfiles_filter' || { msg_error "Expected nftables table was not loaded."; return 1; }
+            ;;
+    esac
+    msg_success "Firewall baseline active via $engine."
+}
+
+firewall_menu() {
+    ui_has_tty || { configure_firewall auto; return; }
+    while true; do
+        ui_header "FIREWALL POLICY" "Existing active frontends are preserved. Auto uses the distribution-family default." "$DOTFILES_UI_PRODUCT"
+        firewall_status_summary
+        ui_section "Frontend"
+        ui_menu_item "1" "Automatic" "Debian/Kali=UFW, Fedora/openSUSE=firewalld, Arch=nftables" "$C_GREEN" "DEFAULT"
+        ui_menu_item "2" "UFW" "Simple host firewall; preserve existing rules"
+        ui_menu_item "3" "nftables" "Native ruleset; refuses to overwrite an existing custom ruleset"
+        ui_menu_item "4" "firewalld" "Zone-based frontend; preserve existing services/ports"
+        ui_menu_item "0" "Back" "Return to hardening menu" "$C_RED"
+        local choice
+        choice="$(ask 'Firewall choice' '1')" || return 1
+        case "$choice" in
+            1) run_task "Automatic firewall baseline" configure_firewall auto; return 0 ;;
+            2) run_task "UFW firewall baseline" configure_firewall ufw; return 0 ;;
+            3) run_task "nftables firewall baseline" configure_firewall nftables; return 0 ;;
+            4) run_task "firewalld firewall baseline" configure_firewall firewalld; return 0 ;;
+            0|q|Q) return 0 ;;
+            *) msg_warn "Invalid firewall selection." ;;
+        esac
+    done
 }
 
 ssh_service_name() {
     service_exists ssh.service && { printf ssh.service; return; }
     service_exists sshd.service && { printf sshd.service; return; }
     return 1
+}
+
+ssh_runtime_active() {
+    service_active ssh.service && return 0
+    service_active sshd.service && return 0
+    service_active ssh.socket && return 0
+    service_active sshd.socket && return 0
+    ss -lntp 2>/dev/null | grep -Eq 'sshd|:22[[:space:]]' && return 0
+    return 1
+}
+
+setup_active_ssh_hardening() {
+    command_exists sshd || { msg_skip "OpenSSH server is not installed."; return 0; }
+    ssh_runtime_active || { msg_skip "OpenSSH server is installed but not active/listening; recommended profile leaves it untouched."; return 0; }
+    setup_ssh_hardening
 }
 
 setup_ssh_hardening() {
@@ -324,11 +408,13 @@ setup_ssh_hardening() {
     hardening_backup_path "$main" || return 1
     hardening_backup_path "$drop" || return 1
     [[ -n "$service" ]] && hardening_record_service "$service"
-    mkdir -p "$dir"
+    mkdir -p "$dir" /run/sshd
+    chmod 0755 /run/sshd 2>/dev/null || true
 
     if ! grep -Eq '^[[:space:]]*Include[[:space:]]+/etc/ssh/sshd_config\.d/\*\.conf' "$main"; then
         local tmp="${main}.dotfiles.$$"
-        { printf 'Include /etc/ssh/sshd_config.d/*.conf\n'; cat "$main"; } >"$tmp"
+        { printf 'Include /etc/ssh/sshd_config.d/*.conf
+'; cat "$main"; } >"$tmp"
         chmod --reference="$main" "$tmp" 2>/dev/null || chmod 0600 "$tmp"
         chown --reference="$main" "$tmp" 2>/dev/null || true
         mv -f "$tmp" "$main"
@@ -350,7 +436,18 @@ EOF_SSH
         hardening_restore_path_from_current_snapshot "$drop" || true
         return 1
     fi
-    [[ -n "$service" ]] && systemctl reload "$service" || true
+
+    if ssh_runtime_active; then
+        if [[ -n "$service" ]] && service_active "$service"; then
+            systemctl reload "$service" >/dev/null 2>&1 || {
+                msg_warn "$service is active but does not support reload; configuration is valid and will apply on next restart."
+            }
+        else
+            msg_info "SSH is socket-activated/listening without an active reloadable service; validated config will apply to new sshd processes."
+        fi
+    else
+        msg_info "SSH service is inactive; configuration was validated but the assistant did not start it."
+    fi
 }
 
 setup_ssh_key_only() {
@@ -373,12 +470,16 @@ EOF_KEYONLY
         return 1
     fi
     service="$(ssh_service_name 2>/dev/null || true)"
-    [[ -n "$service" ]] && { hardening_record_service "$service"; systemctl reload "$service" || return 1; }
+    if [[ -n "$service" ]]; then
+        hardening_record_service "$service"
+        service_active "$service" && systemctl reload "$service" >/dev/null 2>&1 || true
+    fi
     msg_warn "Validate a new SSH login before closing the current session."
 }
 
 setup_fail2ban() {
     command_exists sshd || { msg_skip "No SSH server detected; SSH Fail2Ban jail is unnecessary."; return 0; }
+    ssh_runtime_active || { msg_skip "SSH server is not active/listening; Fail2Ban SSH jail is unnecessary."; return 0; }
     hardening_record_service fail2ban.service
     install_packages fail2ban || return 1
     hardening_backup_path /etc/fail2ban/jail.local || return 1
@@ -500,7 +601,7 @@ profile_recommended() {
     run_task "Balanced network sysctl" apply_network_kernel_baseline
     run_task "Balanced kernel memory baseline" apply_kernel_memory_baseline
     run_task "Host firewall baseline" configure_firewall
-    run_task "Existing SSH server baseline" setup_ssh_hardening
+    run_task "Active SSH server baseline" setup_active_ssh_hardening
     run_task "Automatic security updates" setup_automatic_security_updates
     run_task "SSH brute-force protection" setup_fail2ban
     run_task "MAC, time and service exposure audit" mac_time_service_audit
@@ -522,14 +623,14 @@ execute_option() {
         2|recommended|baseline) profile_recommended ;;
         3|network|sysctl) run_task "Balanced network sysctl" apply_network_kernel_baseline ;;
         4|kernel|memory) run_task "Balanced kernel memory baseline" apply_kernel_memory_baseline ;;
-        5|firewall) run_task "Host firewall baseline" configure_firewall ;;
-        6|ssh) run_task "Existing SSH server baseline" setup_ssh_hardening ;;
-        7|key-only|keyonly) run_task "Key-only SSH policy" setup_ssh_key_only ;;
-        8|updates) run_task "Automatic security updates" setup_automatic_security_updates ;;
-        9|fail2ban) run_task "SSH brute-force protection" setup_fail2ban ;;
+        5|firewall) firewall_menu ;;
+        6|updates) run_task "Automatic security updates" setup_automatic_security_updates ;;
+        7|ssh) run_task "Existing/active SSH baseline" setup_ssh_hardening ;;
+        8|fail2ban) run_task "SSH brute-force protection" setup_fail2ban ;;
+        9|exposure|mac) run_task "MAC, time and service exposure audit" mac_time_service_audit ;;
         10|dns|quad9) run_task "Quad9 DNS policy" setup_dns_security ;;
-        11|exposure|mac) run_task "MAC, time and service exposure audit" mac_time_service_audit ;;
-        12|threat|antivirus) run_task "Threat protection tools" install_threat_tools ;;
+        11|threat|antivirus) run_task "Threat protection tools" install_threat_tools ;;
+        12|key-only|keyonly) run_task "Key-only SSH policy" setup_ssh_key_only ;;
         13|usb|usbguard) run_task "USBGuard" setup_usbguard ;;
         14|shm) run_task "Strict /dev/shm policy" strict_shared_memory_wrapper ;;
         15|blacklist) run_task "Strict kernel module blacklist" strict_module_blacklist_wrapper ;;
@@ -544,24 +645,34 @@ execute_option() {
 interactive_menu() {
     ui_has_tty || { msg_error "Interactive mode requires /dev/tty. Use --audit/--recommended/--all."; return 1; }
     while true; do
-        ui_header "SYSTEM HARDENING" "Balanced defaults first; strict compatibility-impacting controls are explicit"
-        ui_menu_item "1" "Security posture audit" "Read-only kernel, firewall, MAC, SSH, sockets and failed units"
-        ui_menu_item "2" "Recommended baseline" "Network/kernel + firewall + safe SSH + updates + Fail2Ban" "$C_GREEN"
-        ui_menu_item "3" "Network sysctl" "VPN/container-compatible protocol hardening"
-        ui_menu_item "4" "Kernel/memory sysctl" "Pointers, dmesg, ptrace, BPF and protected links"
-        ui_menu_item "5" "Firewall baseline" "Preserve existing rules; no inbound web ports are opened"
-        ui_menu_item "6" "SSH safe baseline" "Only if sshd already exists; no password lockout"
-        ui_menu_item "7" "SSH key-only" "High impact; requires authorized_keys and literal confirmation" "$C_YELLOW"
-        ui_menu_item "8" "Security updates" "Native distro policy where safely supportable"
-        ui_menu_item "9" "Fail2Ban SSH" "Small distro-neutral jail; only when sshd exists"
-        ui_menu_item "10" "Quad9 DNS" "Optional; split-DNS/VPN warning and explicit confirmation" "$C_YELLOW"
-        ui_menu_item "11" "MAC/time/exposure" "Read-only SELinux/AppArmor/time/service review"
-        ui_menu_item "12" "Threat tools" "ClamAV/Lynis/rootkit tools from official repos only"
-        ui_menu_item "13" "USBGuard" "High impact on desktop peripherals" "$C_RED"
-        ui_menu_item "14" "Strict /dev/shm" "noexec may break developer/desktop workloads" "$C_RED"
-        ui_menu_item "15" "Module blacklist" "Optional uncommon protocol reduction" "$C_RED"
-        ui_menu_item "16" "Restore snapshot" "Restore paths and service states recorded before changes" "$C_MAGENTA"
-        ui_menu_item "17" "All modules" "Runs all; high-impact controls still ask individually" "$C_YELLOW"
+        ui_header "SYSTEM HARDENING" "Recommended is workstation-safe. Optional/high-impact controls never run silently." "$DOTFILES_UI_PRODUCT"
+
+        ui_section "Start here"
+        ui_menu_item "1" "Security posture audit" "Read-only kernel, firewall, MAC, SSH, sockets and failed units" "$C_CYAN" "READ-ONLY"
+        ui_menu_item "2" "Recommended baseline" "sysctl + firewall + active SSH + updates + conditional Fail2Ban" "$C_GREEN" "DEFAULT"
+
+        ui_section "Baseline controls"
+        ui_menu_item "3" "Network sysctl" "VPN/container-compatible protocol hardening" "$C_CYAN" "SAFE"
+        ui_menu_item "4" "Kernel / memory" "Pointers, dmesg, ptrace, BPF and protected links" "$C_CYAN" "SAFE"
+        ui_menu_item "5" "Firewall" "Choose/inspect UFW, nftables or firewalld" "$C_CYAN" "SAFE"
+        ui_menu_item "6" "Security updates" "Native distribution update policy" "$C_CYAN" "SAFE"
+        ui_menu_item "7" "SSH baseline" "Only configures an existing server; never installs/starts sshd" "$C_CYAN" "CONDITIONAL"
+        ui_menu_item "8" "Fail2Ban SSH" "Only when SSH is actually active/listening" "$C_CYAN" "CONDITIONAL"
+        ui_menu_item "9" "MAC / time / exposure" "Read-only SELinux/AppArmor/time/service review" "$C_CYAN" "READ-ONLY"
+
+        ui_section "Optional policy changes"
+        ui_menu_item "10" "Quad9 DNS" "Host-wide DNS; avoid on AD/split-DNS/VPN unless intended" "$C_YELLOW" "OPT-IN"
+        ui_menu_item "11" "Threat tools" "ClamAV/Lynis/rootkit tooling from official repos" "$C_YELLOW" "OPT-IN"
+
+        ui_section "High-impact controls"
+        ui_menu_item "12" "SSH key-only" "Requires authorized_keys and literal confirmation" "$C_RED" "HIGH"
+        ui_menu_item "13" "USBGuard" "Can block new keyboards/storage/phones" "$C_RED" "HIGH"
+        ui_menu_item "14" "Strict /dev/shm" "noexec can break developer/desktop workloads" "$C_RED" "HIGH"
+        ui_menu_item "15" "Module blacklist" "Blocks uncommon kernel protocols" "$C_RED" "HIGH"
+
+        ui_section "Recovery / advanced"
+        ui_menu_item "16" "Restore snapshot" "Restore assistant-managed files and service states" "$C_MAGENTA" "RECOVERY"
+        ui_menu_item "17" "Advanced all" "Runs all modules; high-impact steps still ask individually" "$C_YELLOW" "CONFIRM"
         ui_menu_item "0" "Exit" "Leave hardening workspace" "$C_RED"
         ui_rule
 
