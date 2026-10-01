@@ -27,6 +27,7 @@ set backup
 set writebackup
 
 set number
+set relativenumber
 set cursorline
 set showcmd
 set wildmenu

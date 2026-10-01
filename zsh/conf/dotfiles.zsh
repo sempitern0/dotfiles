@@ -33,6 +33,57 @@ setopt INTERACTIVE_COMMENTS AUTO_CD
 [[ -r "$HOME/.bash.aliases" ]] && source "$HOME/.bash.aliases"
 alias refresh='source ~/.zshrc'
 
+# Bash-compatible history shim for Zsh. Kali's default Zsh configuration
+# commonly exposes `history` as an alias around `fc -l`, where Bash flags
+# such as `history -c` are not valid. Keep Zsh's native listing semantics
+# while mapping the most useful Bash history maintenance operations.
+unalias history 2>/dev/null || true
+history() {
+    emulate -L zsh
+
+    case "${1:-}" in
+        -c)
+            local histfile="${HISTFILE:-$HOME/.zsh_history}"
+            if [[ -n "$histfile" ]]; then
+                mkdir -p "${histfile:h}" 2>/dev/null || true
+                : >| "$histfile" || {
+                    print -u2 -- "history: unable to truncate $histfile"
+                    return 1
+                }
+                # Switch to a fresh in-memory history list initialized from the
+                # now-empty file. Without -a this context remains active after
+                # the function returns, which matches Bash's `history -c`.
+                fc -p "$histfile"
+            else
+                fc -p
+            fi
+            return 0
+            ;;
+        -a)
+            shift
+            fc -AI "${1:-${HISTFILE:-}}"
+            return $?
+            ;;
+        -r)
+            shift
+            fc -R "${1:-${HISTFILE:-}}"
+            return $?
+            ;;
+        -w)
+            shift
+            fc -W "${1:-${HISTFILE:-}}"
+            return $?
+            ;;
+        --help|-h)
+            print -- "history [n] | history -c | history -a [file] | history -r [file] | history -w [file]"
+            return 0
+            ;;
+        *)
+            fc -l "$@"
+            ;;
+    esac
+}
+
 if command -v fzf >/dev/null 2>&1; then
     if fzf --zsh >/dev/null 2>&1; then
         eval "$(fzf --zsh)"
