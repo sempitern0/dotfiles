@@ -82,7 +82,10 @@ require_package_provider() {
 }
 
 ensure_user_shim() {
-    local name="$1" target="$2" bin_dir="$TARGET_HOME/.local/bin" link="$bin_dir/$name"
+    local name="$1"
+    local target="$2"
+    local bin_dir="$TARGET_HOME/.local/bin"
+    local link="$bin_dir/$name"
     [[ -n "$target" && -x "$target" ]] || return 0
     mkdir -p "$bin_dir"
     (( EUID == 0 )) && chown "$TARGET_USER:$TARGET_GROUP" "$TARGET_HOME/.local" "$bin_dir" 2>/dev/null || true
