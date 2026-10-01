@@ -198,9 +198,87 @@ Existing private keys and host definitions are preserved. No private-key filenam
 
 ## Vim is optional
 
-The supplied Vim profile is pluginless and performs no first-run network bootstrap.
+The supplied Vim profile is deliberately **pluginless**. Opening Vim never downloads a plugin manager, theme, binary or remote configuration. Choose it explicitly from the assistant or use `--full`; the Recommended workstation profile does not touch Vim.
 
-Choose it explicitly from the assistant or use `--full`. The Recommended profile does not touch Vim.
+The profile keeps ordinary absolute line numbers and explicitly disables relative numbering. Persistent undo, swap and backup files live below `~/.local/state/vim` and `~/.cache/vim` instead of polluting project directories.
+
+### Visual behaviour
+
+The base colourscheme remains available offline, while the profile overrides the UI groups that matter most during long editing sessions. `CursorLine` uses a neutral charcoal background so syntax colours remain readable; search, incremental search, selections, matching parentheses and diff regions use dedicated high-contrast backgrounds.
+
+Only the active window receives a full cursor-line highlight. This makes split layouts easier to scan without tinting every visible line.
+
+### Leader key
+
+The leader key is **Space**. The most useful mappings are:
+
+| Mapping | Action |
+| --- | --- |
+| `Space w` | Save current file |
+| `Space q` | Quit current window |
+| `Space h` | Clear search highlighting |
+| `Space e` | Toggle/open Vim's built-in file explorer (`Lexplore`) |
+| `Space f` | Start `:find` for files below the project tree |
+| `Space g` | Start project text search through `:grep` |
+| `Space b` | List buffers and prompt for a buffer |
+| `Space bn` / `Space bp` | Next / previous buffer |
+| `Space bd` | Delete current buffer |
+| `Space sv` | Vertical split |
+| `Space sh` | Horizontal split |
+| `Space sc` | Close current split |
+| `Ctrl-h/j/k/l` | Move between splits |
+| `Space co` / `Space cc` | Open / close quickfix results |
+| `Space cn` / `Space cp` | Next / previous quickfix result |
+| `Space p` in Visual mode | Paste without overwriting the yank register |
+
+Standard Vim search navigation (`n` / `N`) and half-page scrolling (`Ctrl-d` / `Ctrl-u`) automatically recenter the current match/line.
+
+### Practical workflows
+
+**Find a file anywhere below the current project:**
+
+```vim
+<Space>f settings.py
+```
+
+The profile adds `**` to Vim's search path and ignores common generated trees such as `.git`, `node_modules`, `.venv`, `dist` and `build`.
+
+**Search project contents with ripgrep:**
+
+```vim
+<Space>g TODO
+```
+
+When `rg` is installed, Vim uses `rg --vimgrep --smart-case` and loads matches into the quickfix list. Then use:
+
+```text
+Space co    open results
+Space cn    next match
+Space cp    previous match
+Space cc    close results
+```
+
+Without `rg`, Vim keeps its normal built-in grep behaviour rather than failing startup.
+
+**Work with two files side by side:**
+
+```text
+Space sv        create vertical split
+Space f file    locate another file
+Ctrl-h / Ctrl-l move left/right between splits
+Space sc        close the current split
+```
+
+**Move between already-open files without plugins:**
+
+```text
+Space b         inspect buffers
+Space bn        next buffer
+Space bp        previous buffer
+Space bd        close buffer
+```
+
+The goal is intentionally modest: provide fast project navigation and editing primitives using Vim itself, while leaving language servers, completion frameworks and plugin ecosystems as an explicit user choice rather than a bootstrap side effect.
 
 ## Portable commands
 
