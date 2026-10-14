@@ -92,7 +92,7 @@ ensure_user_shim() {
     if [[ -L "$link" && "$(readlink -f "$link" 2>/dev/null || true)" == "$(readlink -f "$target" 2>/dev/null || printf '%s' "$target")" ]]; then
         return 0
     fi
-    [[ -e "$link" || -L "$link" ]] && backup_path "$link"
+    backup_path "$link" || return 1
     rm -f -- "$link"
     ln -s -- "$target" "$link" || return 1
     (( EUID == 0 )) && chown -h "$TARGET_USER:$TARGET_GROUP" "$link" 2>/dev/null || true
@@ -223,7 +223,7 @@ configure_ssh_client() {
     # OpenSSH supports Include. Preserve personal hosts/keys in the user's main file.
     local include_line='Include ~/.ssh/conf.d/*.conf'
     if [[ -e "$main" ]]; then
-        backup_path "$main"
+        backup_path "$main" || return 1
         grep -Fqx "$include_line" "$main" 2>/dev/null || {
             local tmp="${main}.dotfiles.$$"
             { printf '%s\n\n' "$include_line"; cat "$main"; } >"$tmp"
@@ -264,10 +264,7 @@ configure_commands() {
     while IFS= read -r -d '' tool; do
         name="$(basename "$tool" .sh)"
         [[ "$name" == "pstree" ]] && name="pstree-info"
-        backup_path "$dest/$name"
-        cp -- "$tool" "$dest/$name" || return 1
-        chmod 0755 "$dest/$name"
-        (( EUID == 0 )) && chown "$TARGET_USER:$TARGET_GROUP" "$dest/$name" 2>/dev/null || true
+        copy_with_backup "$tool" "$dest/$name" "$TARGET_USER" 0755 || return 1
     done < <(find "$src_root" -type f -name '*.sh' -print0)
     configure_command_shims || true
 }

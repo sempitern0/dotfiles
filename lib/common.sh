@@ -411,32 +411,39 @@ package_group_install() {
 }
 
 backup_path() {
-    local path="$1" rel="" dest=""
+    local path="$1" rel="" dest="" staging=""
     [[ -e "$path" || -L "$path" ]] || return 0
     rel="${path#/}"
     dest="${DOTFILES_BACKUP_HOME}/${DOTFILES_RUN_ID}/${rel}"
+    # Keep the original pre-run state when a module is selected more than once.
+    [[ -e "$dest" || -L "$dest" ]] && return 0
     ensure_target_dir "$DOTFILES_BACKUP_HOME" 0700 || return 1
     ensure_target_dir "$DOTFILES_BACKUP_HOME/$DOTFILES_RUN_ID" 0700 || return 1
-    mkdir -p "$(dirname "$dest")"
-    if (( EUID == 0 )); then chown "$TARGET_USER:$TARGET_GROUP" "$(dirname "$dest")" 2>/dev/null || true; fi
-    cp -a -- "$path" "$dest"
+    mkdir -p "$(dirname "$dest")" || return 1
+    if (( EUID == 0 )); then chown "$TARGET_USER:$TARGET_GROUP" "$(dirname "$dest")" || return 1; fi
+    staging="$(mktemp -d "${dest}.backup.XXXXXX")" || return 1
+    if ! cp -a -- "$path" "$staging/original"; then rm -rf -- "$staging"; return 1; fi
     if (( EUID == 0 )) && [[ -n "${TARGET_USER:-}" && "${TARGET_USER:-root}" != root ]]; then
-        chown -R "$TARGET_USER:${TARGET_GROUP:-$(id -gn "$TARGET_USER" 2>/dev/null || printf "$TARGET_USER")}" "$dest" 2>/dev/null || true
+        if ! chown -hR "$TARGET_USER:$TARGET_GROUP" "$staging/original"; then rm -rf -- "$staging"; return 1; fi
     fi
+    if ! mv -- "$staging/original" "$dest"; then rm -rf -- "$staging"; return 1; fi
+    rmdir -- "$staging"
+    return 0
 }
 
 copy_with_backup() {
-    local src="$1" dest="$2" owner="${3:-${TARGET_USER:-root}}" mode="${4:-}"
+    local src="$1" dest="$2" owner="${3:-${TARGET_USER:-root}}" mode="${4:-}" tmp=""
     [[ -f "$src" ]] || { msg_error "Source file not found: $src"; return 1; }
-    mkdir -p "$(dirname "$dest")"
-    backup_path "$dest"
-    local tmp="${dest}.dotfiles.$$"
-    cp -- "$src" "$tmp" || return 1
-    [[ -n "$mode" ]] && chmod "$mode" "$tmp"
+    mkdir -p "$(dirname "$dest")" || return 1
+    backup_path "$dest" || { msg_error "Backup failed; leaving $dest unchanged."; return 1; }
+    # A unique sibling permits an atomic rename without following a stale symlink.
+    tmp="$(mktemp "${dest}.dotfiles.XXXXXX")" || return 1
+    if ! cp -- "$src" "$tmp"; then rm -f -- "$tmp"; return 1; fi
+    if [[ -n "$mode" ]] && ! chmod "$mode" "$tmp"; then rm -f -- "$tmp"; return 1; fi
     if (( EUID == 0 )); then
-        chown "$owner:$(id -gn "$owner" 2>/dev/null || printf "$owner")" "$tmp" 2>/dev/null || true
+        if ! chown "$owner:$(id -gn "$owner")" "$tmp"; then rm -f -- "$tmp"; return 1; fi
     fi
-    mv -f -- "$tmp" "$dest"
+    if ! mv -f -- "$tmp" "$dest"; then rm -f -- "$tmp"; return 1; fi
 }
 
 ensure_line() {
