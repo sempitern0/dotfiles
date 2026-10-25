@@ -15,43 +15,61 @@ import subprocess
 import tempfile
 import sys
 import textwrap
+from functools import lru_cache
 from html.parser import HTMLParser
 from urllib.parse import parse_qsl, urlencode, urljoin, urlsplit, urlunsplit
 
 MAX_INPUT = 8 * 1024 * 1024
 SECTIONS = ('summary', 'headings', 'text', 'links', 'media', 'assets', 'forms', 'metadata', 'discovery')
-FILTERS = {
-    'summary': ('summary', None), 'headings': ('headings', None),
-    'text': ('text', None), 'links': ('links', None),
-    'images': ('media', ('images',)),
-    'videos': ('media', ('videos', 'video_sources')),
-    'video-sources': ('media', ('video_sources',)),
-    'blobs': ('media', ('blob_urls',)),
-    'embeds': ('media', ('embedded',)),
-    'audio': ('media', ('audio',)),
-    'subtitles': ('media', ('subtitles',)),
-    'media': ('media', None),
-    'scripts': ('assets', ('scripts', 'inline_scripts')),
-    'stylesheets': ('assets', ('stylesheets', 'inline_styles')),
-    'icons': ('assets', ('icons',)),
-    'feeds': ('assets', ('feeds',)),
-    'assets': ('assets', None),
-    'forms': ('forms', None),
-    'metadata': ('metadata', ('meta',)),
-    'jsonld': ('metadata', ('json_ld',)),
-    'endpoints': ('discovery', ('possible_endpoints',)),
-    'indicators': ('discovery', ('inline_js_indicators',)),
-    'discovery': ('discovery', None),
+# One registry powers the filter selection and --help descriptions.
+FILTER_GROUPS = {
+    'Page and content': {
+        'summary': ('summary', None, 'Site title, language, canonical and overview'),
+        'headings': ('headings', None, 'H1–H6 headings'),
+        'text': ('text', None, 'Visible paragraph text (static HTML)'),
+        'links': ('links', None, 'Anchor text and destination URLs'),
+    },
+    'Images, video and audio': {
+        'images': ('media', ('images',), 'Image URLs and alternate text'),
+        'videos': ('media', ('videos', 'video_sources'), 'Video players and source candidates'),
+        'video-sources': ('media', ('video_sources',), 'MP4, WebM, HLS and DASH candidates'),
+        'blobs': ('media', ('blob_urls',), 'Temporary browser blob: references'),
+        'embeds': ('media', ('embedded',), 'iframes and embedded media tags'),
+        'audio': ('media', ('audio',), 'Audio elements and associated sources'),
+        'subtitles': ('media', ('subtitles',), 'Caption/subtitle tracks'),
+        'media': ('media', None, 'All media categories'),
+    },
+    'Assets and metadata': {
+        'scripts': ('assets', ('scripts', 'inline_scripts'), 'External and inline script counts'),
+        'stylesheets': ('assets', ('stylesheets', 'inline_styles'), 'External CSS and inline style counts'),
+        'icons': ('assets', ('icons',), 'Icons and favicons'),
+        'feeds': ('assets', ('feeds',), 'RSS/Atom feed references'),
+        'assets': ('assets', None, 'All CSS/JS/icons/feeds'),
+        'forms': ('forms', None, 'Form actions, methods and field names (no values)'),
+        'metadata': ('metadata', ('meta',), 'SEO, Open Graph and Twitter metadata'),
+        'jsonld': ('metadata', ('json_ld',), 'JSON-LD structured-data types'),
+    },
+    'Static discovery': {
+        'endpoints': ('discovery', ('possible_endpoints',), 'Possible API endpoints in embedded scripts'),
+        'indicators': ('discovery', ('inline_js_indicators',), 'Possible anti-debugging JavaScript indicators'),
+        'discovery': ('discovery', None, 'All discovery results'),
+    },
 }
+FILTERS = {flag: (section, keys)
+           for group in FILTER_GROUPS.values()
+           for flag, (section, keys, _description) in group.items()}
+
 DEFAULT_SECTIONS = ('summary', 'headings', 'links', 'media', 'assets', 'forms', 'metadata', 'discovery')
 SENSITIVE = re.compile(r'(?:token|secret|password|passwd|api[_-]?key|session|signature|auth|credential|access[_-]?key|jwt|code)', re.I)
 VIDEO_EXT = re.compile(r'\.(?:mp4|m4v|webm|mov|ogv|m3u8|mpd)(?:$|[?#])', re.I)
-STREAM_EXT = re.compile(r'\.(?:m3u8|mpd)(?:$|[?#])', re.I)
 INLINE_URLS = re.compile(r'[\x22\x27]((?:https?://|/)[^\x22\x27\s<>]{1,2000})[\x22\x27]', re.I)
 VIDEO_HOST = re.compile(r'(?:youtube(?:-nocookie)?\.com|youtu\.be|vimeo\.com|dailymotion\.com|player\.twitch\.tv)', re.I)
 
+_WHITESPACE = re.compile(r'\s+')
+_CONTROL = re.compile(r'[\x00-\x1f\x7f-\x9f]')
+
 def clean(value):
-    return re.sub(r'\s+', ' ', re.sub(r'[\x00-\x1f\x7f-\x9f]', ' ', str(value or ''))).strip()
+    return _WHITESPACE.sub(' ', _CONTROL.sub(' ', str(value or ''))).strip()
 
 def unique(values, key=lambda x: x):
     seen, result = set(), []
@@ -69,7 +87,8 @@ class Page(HTMLParser):
         self.metas = []; self.headings = []; self.text = []; self.links = []
         self.images = []; self.embedded = []; self.videos = []; self.audios = []; self.subtitles = []; self.video_sources = []
         self.blobs = []; self.js = []; self.css = []; self.icons = []; self.feeds = []
-        self.forms = []; self.jsonld = []; self.inline = []; self.inline_styles = 0
+        self.forms = []; self.active_form = None
+        self.jsonld = []; self.inline = []; self.inline_styles = 0
         self.script = None; self.captures = []; self.media_stack = []
 
     def handle_starttag(self, tag, attrs):
@@ -91,9 +110,10 @@ class Page(HTMLParser):
             src = d.get('src') or d.get('data-src')
             if src: self.images.append({'url': src, 'alt': clean(d.get('alt'))})
         if tag == 'form':
-            self.forms.append({'method': (d.get('method') or 'GET').upper(), 'action': d.get('action',''), 'fields': []})
-        if tag in ('input', 'select', 'textarea') and self.forms and d.get('name'):
-            self.forms[-1]['fields'].append({'name': d['name'], 'type': d.get('type', tag)})
+            self.active_form = {'method': (d.get('method') or 'GET').upper(), 'action': d.get('action',''), 'fields': []}
+            self.forms.append(self.active_form)
+        if tag in ('input', 'select', 'textarea') and self.active_form is not None and d.get('name'):
+            self.active_form['fields'].append({'name': d['name'], 'type': d.get('type', tag)})
         if tag == 'style': self.inline_styles += 1
         if tag == 'script': self.script = {'url': d.get('src', ''), 'type': d.get('type',''), 'parts': []}
         if tag in ('title', 'p', 'a', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6'):
@@ -143,6 +163,7 @@ class Page(HTMLParser):
         if self.captures: self.captures[-1]['parts'].append(data)
 
     def handle_endtag(self, tag):
+        if tag == 'form': self.active_form = None
         if tag == 'script' and self.script is not None:
             s = self.script; self.script = None; body = ''.join(s['parts'])
             if s['url']: self.js.append({'url': s['url'], 'type': s['type']})
@@ -219,30 +240,90 @@ def fetch_url(url, timeout):
         if not payload: raise ValueError(f'Empty HTTP response from {effective}.')
     return payload, effective, code, ctype
 
+EXAMPLES = '''Examples:
+  extracthtmlinfo                               Quick start (this panel)
+  extracthtmlinfo --help                        Detailed options
+  extracthtmlinfo page.html                     Analyze a saved file
+  extracthtmlinfo https://example.org/          Download HTML via curl, then analyze
+  curl -fsSL https://example.org/ | extracthtmlinfo - --base-url https://example.org/
+  extracthtmlinfo page.html --images --links    Combine filters
+  extracthtmlinfo https://example.org/ --videos --video-sources
+  extracthtmlinfo page.html --endpoints --json > endpoints.json
+  extracthtmlinfo page.html --sections summary,media --all
+
+Notes:
+  - URL input uses curl; only the HTML document is downloaded.
+  - Relative links are resolved with the fetched URL or --base-url.
+  - JSON goes to stdout; fetch status and errors go to stderr.
+  - A blob: URL is not a directly downloadable media link.
+  - This tool never executes JavaScript or bypasses access controls.'''
+
+QUICK_HELP = '''usage: extracthtmlinfo <file.html | http(s)://URL | -> [options]
+
+Extract important information from static HTML in readable tables or JSON.
+
+INPUT
+  file.html                 Read a downloaded HTML file
+  https://example.org/      Fetch the HTML with curl (no browser required)
+  -                         Read HTML from stdin (pipe)
+
+QUICK EXAMPLES
+  extracthtmlinfo https://example.org/ --links
+  extracthtmlinfo index.html --images --videos
+  curl -fsSL https://example.org | extracthtmlinfo - --base-url https://example.org/
+  extracthtmlinfo index.html --endpoints --json > report.json
+
+FILTERS (combine as needed)
+  Content    --summary --headings --text --links
+  Media      --images --videos --video-sources --audio --subtitles --blobs --embeds
+  Assets     --scripts --stylesheets --icons --feeds
+  Other      --forms --metadata --jsonld --endpoints --indicators
+  Groups     --media --assets --discovery or --sections summary,media
+
+OUTPUT       --json  --all  --limit N  --no-color
+FETCH        --timeout N  --base-url URL  --quiet
+PRIVACY      --raw-urls  (disable automatic URL parameter redaction)
+
+Run 'extracthtmlinfo --help' for every option and more examples.
+'''
+
 def cli():
-    parser = argparse.ArgumentParser(prog='extracthtmlinfo',
-        description='Inspect HTML files, piped content or HTTP(S) URLs without executing JavaScript.',
+    parser = argparse.ArgumentParser(
+        prog='extracthtmlinfo',
+        description='Inspect a local HTML file, stdin or a web URL without executing JavaScript.',
         formatter_class=argparse.RawDescriptionHelpFormatter,
-        epilog='Examples:\n  extracthtmlinfo https://example.org/\n  extracthtmlinfo page.html --images --videos\n  extracthtmlinfo https://example.org --links --endpoints --json\n  curl -fsSL https://example.org | extracthtmlinfo - --base-url https://example.org/\n  extracthtmlinfo page.html --sections summary,media --all\n\nEach category flag can be combined with others. A blob: URL is temporary browser state, not a download link.')
-    parser.add_argument('file', nargs='?', help='HTML file, HTTP(S) URL, or - for stdin')
-    parser.add_argument('--base-url', default='', help='Base HTTP(S) URL for relative links')
-    parser.add_argument('--json', action='store_true', help='Output machine-readable JSON')
-    parser.add_argument('--sections', default=None, help='Comma-separated groups: '+','.join(SECTIONS))
-    parser.add_argument('--limit', type=int, default=10, help='Max displayed rows per table (default: 10)')
-    parser.add_argument('--all', action='store_true', help='Show all matching rows')
-    parser.add_argument('--no-color', action='store_true', help='Disable ANSI colors')
-    parser.add_argument('--raw-urls', action='store_true', help='Keep sensitive URL query values (caution)')
-    parser.add_argument('--timeout', type=int, default=25, help='Max URL download time in seconds (default: 25)')
-    parser.add_argument('--quiet', action='store_true', help='Suppress fetch progress; errors still shown')
-    group = parser.add_argument_group('data filters (combine freely)')
-    for flag in FILTERS:
-        group.add_argument('--'+flag, action='store_true', dest='only_'+flag.replace('-','_'),
-                           help='Extract '+flag.replace('-',' ')+' only (combinable)')
-    if len(sys.argv)==1:
-        parser.print_help(); return 0
+        epilog=EXAMPLES,
+    )
+    parser.add_argument('file', nargs='?', metavar='FILE|URL|-',
+                        help='HTML path, http(s) URL, or - for stdin (a pipe)')
+    output = parser.add_argument_group('Display and selection')
+    output.add_argument('--json', action='store_true', help='JSON to stdout; good for jq and scripts')
+    output.add_argument('--sections', metavar='NAMES',
+                        help='Select main groups (comma-separated); see examples below')
+    output.add_argument('--limit', type=int, default=10, metavar='N',
+                        help='Maximum rows shown per table (default 10)')
+    output.add_argument('--all', action='store_true', help='Display all rows, ignoring --limit')
+    output.add_argument('--no-color', action='store_true', help='Disable ANSI colors in terminal')
+    output.add_argument('--raw-urls', action='store_true',
+                        help='Disable URL query-parameter redaction; may expose secrets')
+    network = parser.add_argument_group('Fetching URLs (curl)')
+    network.add_argument('--base-url', default='', metavar='URL',
+                         help='Resolve relative URLs when reading a file or stdin')
+    network.add_argument('--timeout', type=int, default=25, metavar='SEC',
+                         help='Overall network timeout (1–120 seconds, default 25)')
+    network.add_argument('--quiet', action='store_true',
+                         help='Hide progress on stderr; errors still appear')
+    for label, filters in FILTER_GROUPS.items():
+        group = parser.add_argument_group(label+' filters (combine multiple flags)')
+        for flag, (_section, _fields, description) in filters.items():
+            group.add_argument('--'+flag, action='store_true',
+                               dest='only_'+flag.replace('-','_'), help=description)
+    if len(sys.argv) == 1:
+        print(QUICK_HELP, end='')
+        return 0
     args = parser.parse_args()
     if args.file is None:
-        parser.print_help(); return 0
+        parser.error('missing FILE or URL. Example: extracthtmlinfo https://example.org/ (or run without arguments for help)')
     if args.file == '-' and sys.stdin.isatty():
         parser.error('stdin is a terminal; provide a file or URL, or pipe HTML into -')
     if args.limit<1: parser.error('--limit must be >= 1')
@@ -295,6 +376,7 @@ def cli():
         print('[HINT] Try extracthtmlinfo --help for examples.',file=sys.stderr)
         return 1
     base = urljoin(final_url,page.base) if page.base and final_url else page.base or final_url
+    @lru_cache(maxsize=4096)
     def safe(url):
         if not url: return ''
         url = urljoin(base,url) if base else url
@@ -322,12 +404,13 @@ def cli():
     for link in page.links:
         if VIDEO_EXT.search(urlsplit(link['url']).path):
             page.video_sources.append({'origin':'anchor','url':link['url']})
-    for code in page.inline:
-        for match in INLINE_URLS.finditer(code):
-            url = match.group(1).replace('\\/','/')
-            if VIDEO_EXT.search(urlsplit(url).path):
-                page.video_sources.append({'origin':'inline script (candidate)','url':url})
-            if url.startswith('blob:'): page.blobs.append({'origin':'inline script','url':url})
+    inline = '\n'.join(page.inline)
+    inline_urls = [match.group(1).replace('\\/','/') for match in INLINE_URLS.finditer(inline)]
+    for url in inline_urls:
+        if VIDEO_EXT.search(urlsplit(url).path):
+            page.video_sources.append({'origin':'inline script (candidate)','url':url})
+        if url.startswith('blob:'):
+            page.blobs.append({'origin':'inline script','url':url})
     for m in page.metas:
         if 'video' in m['name'] and m['value'].startswith('blob:'):
             page.blobs.append({'origin':m['name'],'url':m['value']})
@@ -340,12 +423,11 @@ def cli():
              'counts':{'headings':len(page.headings),'links':len(links),'images':len(page.images),
                        'videos':len(page.videos),'video_sources':len(normalize(page.video_sources,('url',))),
                        'scripts':len(page.js),'forms':len(page.forms)}}
-    inline='\n'.join(page.inline)
     indicators=[label for label,pattern in [('debugger',r'\bdebugger\s*;'),('devtools',r'\bdevtools\b'),('window.close',r'\bwindow\.close\s*\('),('window dimensions',r'\b(?:outerWidth|innerWidth)\b'),('redirect',r'\blocation\.(?:href|replace|assign)'),('browser blobs',r'\b(?:createObjectURL|MediaSource)\b')] if re.search(pattern,inline,re.I)]
     candidates=[]
-    for m in INLINE_URLS.finditer(inline):
-        value = m.group(1)
-        if re.search(r'/api/|/graphql(?:[/?#]|$)|\.json(?:[?#]|$)',value,re.I): candidates.append(safe(value))
+    for url in inline_urls:
+        if re.search(r'/api/|/graphql(?:[/?#]|$)|\.json(?:[?#]|$)',url,re.I):
+            candidates.append(safe(url))
     result={
         'summary':summary,
         'headings':page.headings,
@@ -387,9 +469,10 @@ def cli():
         maxw=width-4
         # Columns contain (header, width fraction); priority to URL/text fields
         weights=[p for h,p in columns]; available=maxw-3*(len(columns)-1)
-        colw=[max(7,round(available*x/sum(weights))) for x in weights]
-        while sum(colw)>available: colw[colw.index(max(colw))]-=1
-        while sum(colw)<available: colw[colw.index(max(colw))]+=1
+        baseline = 7 * len(columns)
+        extra = max(0, available - baseline)
+        colw = [7 + extra * w // sum(weights) for w in weights]
+        colw[-1] += available - sum(colw)
         heads=' | '.join(h[:n].ljust(n) for (h,_),n in zip(columns,colw))
         print('  '+tint(heads,'1'))
         print('  '+'-+-'.join('-'*n for n in colw))
