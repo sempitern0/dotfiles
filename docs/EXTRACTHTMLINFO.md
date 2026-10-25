@@ -1,29 +1,49 @@
-# extracthtmlinfo
+# extracthtmlinfo — HTML inventory CLI
 
-Static, read-only HTML inspector at `bash/bin/recon/extracthtmlinfo.sh`. The existing workstation setup installs it as `~/.local/bin/extracthtmlinfo` (without the .sh extension).
-
-**Requirements:** Bash and Python 3 standard library. No pip packages, linked-resource downloads, JS execution or browser automation.
+A read-only HTML inspector installed from `bash/bin/recon/extracthtmlinfo.sh` into `~/.local/bin/extracthtmlinfo` by the normal dotfiles setup. Dependencies: Bash, Python 3 (stdlib); curl only when a URL is passed. No browser execution or linked resource downloads.
 
 ## Usage
 
 ```bash
-extracthtmlinfo                         # show help; no hang
+extracthtmlinfo                                    # show help
 extracthtmlinfo --help
-extracthtmlinfo page.html
-curl -fsSL --compressed https://example.org/ | extracthtmlinfo - --base-url https://example.org/
-extracthtmlinfo page.html --sections summary,media,discovery --all
-extracthtmlinfo page.html --json > report.json
-extracthtmlinfo page.html --no-color --limit 20
+extracthtmlinfo page.html                          # local file
+extracthtmlinfo https://example.org/               # automatically fetch with curl
+curl -fsSL https://example.org/ | extracthtmlinfo - --base-url https://example.org/
+extracthtmlinfo https://example.org/ --videos --video-sources
+extracthtmlinfo page.html --images --links --endpoints
+extracthtmlinfo page.html --scripts --stylesheets --forms
+extracthtmlinfo page.html --audio --subtitles --embeds --json
+extracthtmlinfo page.html --sections summary,media --all
+extracthtmlinfo https://example.org/ --timeout 10 --quiet
 ```
 
-Pretty-print mode displays separate tables for headings, link text and destinations, images, video elements, video streams/sources, embedded players, scripts, stylesheets, forms, metadata, JSON-LD types, candidate endpoints and inline JavaScript indicators. Output is terminal-width aware and colors are used only on interactive terminals. `--json` provides all records in machine-readable form.
+A URL invokes curl internally, following at most 5 redirects, with 8 MiB size cap, time limits, compressed transfer, 4xx/5xx handling, MIME checks, and origin of the effective URL used to resolve relative paths. `--json` writes only JSON to stdout; status/errors go to stderr. Without arguments the command prints help instead of blocking on stdin.
 
-Video discovery covers `<video>`, nested `<source>`, `<track>`, `<iframe>`, `og:video`, Twitter-player metadata, JSON-LD VideoObject (`contentUrl` and `embedUrl`), and simple direct media references (`.mp4`, `.webm`, `.m3u8`, `.mpd`) embedded in inline scripts. Results are candidates, not verified playable URLs.
+## Individual flags (combinable)
 
-**Important:** `blob:` URLs are browser-session-local object URLs, not remote file addresses and cannot be converted mathematically to stable HTTP(S) links. The command reports them separately; if underlying MP4/HLS/DASH URLs already appear in the downloaded HTML, it lists those as candidates. It cannot recover runtime-generated media or replace permissions, login, signed URLs or DRM.
+| Flag | Extracts |
+| --- | --- |
+| `--summary`, `--headings`, `--text`, `--links` | General information, headings, paragraphs, anchor URLs |
+| `--images`, `--videos`, `--video-sources` | Images, HTML5 video, MP4/WebM/HLS/DASH candidates |
+| `--blobs`, `--embeds`, `--audio`, `--subtitles`, `--media` | Blob URLs, iframes/media tags, audio, tracks, complete media |
+| `--scripts`, `--stylesheets`, `--icons`, `--feeds`, `--assets` | External asset references |
+| `--forms`, `--metadata`, `--jsonld` | Form names/types (no values), SEO/OpenGraph, JSON-LD |
+| `--endpoints`, `--indicators`, `--discovery` | Candidate APIs and inline anti-debugging heuristics |
 
-Use `--base-url` to resolve relative paths from downloaded HTML. Inputs can be a local file or `-` for stdin; no live network URL is downloaded directly by the tool.
+Other options: `--json`, `--sections LIST`, `--limit N`, `--all`, `--base-url URL`, `--no-color`, `--raw-urls`, `--timeout N`, `--quiet`. Individual flags can be combined with `--sections`.
 
-The parser does not print form field values, and redacts common sensitive URL query keys. It is not a comprehensive data-loss prevention tool: inspect generated reports before sharing them. Inputs are limited to 8 MiB.
+## Error handling and limitations
 
-Run tests using `bash tests/extracthtmlinfo-smoke.sh`.
+Nonzero exit and stderr feedback on invalid arguments, missing local file, empty/non-HTML response, DNS/connect timeout, redirects or HTTP errors. Ctrl+C exits 130. URL fetching does not execute JavaScript or visit linked assets.
+
+A `blob:` URL is a temporary in-browser object reference; it cannot be converted directly into a permanent HTTP URL. Only MP4/HLS/DASH references visible in downloaded HTML, metadata or inline scripts can be reported as candidates. No DRM or authentication bypass.
+
+Sensitive-looking query parameters are redacted unless `--raw-urls` is set. Review output for other sensitive text before sharing.
+
+## Test
+
+```bash
+bash -n bash/bin/recon/extracthtmlinfo.sh
+bash tests/extracthtmlinfo-smoke.sh
+```
