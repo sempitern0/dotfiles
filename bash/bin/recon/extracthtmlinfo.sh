@@ -11,6 +11,8 @@ import json
 import os
 import re
 import shutil
+import subprocess
+import tempfile
 import sys
 import textwrap
 from html.parser import HTMLParser
@@ -18,6 +20,29 @@ from urllib.parse import parse_qsl, urlencode, urljoin, urlsplit, urlunsplit
 
 MAX_INPUT = 8 * 1024 * 1024
 SECTIONS = ('summary', 'headings', 'text', 'links', 'media', 'assets', 'forms', 'metadata', 'discovery')
+FILTERS = {
+    'summary': ('summary', None), 'headings': ('headings', None),
+    'text': ('text', None), 'links': ('links', None),
+    'images': ('media', ('images',)),
+    'videos': ('media', ('videos', 'video_sources')),
+    'video-sources': ('media', ('video_sources',)),
+    'blobs': ('media', ('blob_urls',)),
+    'embeds': ('media', ('embedded',)),
+    'audio': ('media', ('audio',)),
+    'subtitles': ('media', ('subtitles',)),
+    'media': ('media', None),
+    'scripts': ('assets', ('scripts', 'inline_scripts')),
+    'stylesheets': ('assets', ('stylesheets', 'inline_styles')),
+    'icons': ('assets', ('icons',)),
+    'feeds': ('assets', ('feeds',)),
+    'assets': ('assets', None),
+    'forms': ('forms', None),
+    'metadata': ('metadata', ('meta',)),
+    'jsonld': ('metadata', ('json_ld',)),
+    'endpoints': ('discovery', ('possible_endpoints',)),
+    'indicators': ('discovery', ('inline_js_indicators',)),
+    'discovery': ('discovery', None),
+}
 DEFAULT_SECTIONS = ('summary', 'headings', 'links', 'media', 'assets', 'forms', 'metadata', 'discovery')
 SENSITIVE = re.compile(r'(?:token|secret|password|passwd|api[_-]?key|session|signature|auth|credential|access[_-]?key|jwt|code)', re.I)
 VIDEO_EXT = re.compile(r'\.(?:mp4|m4v|webm|mov|ogv|m3u8|mpd)(?:$|[?#])', re.I)
@@ -42,7 +67,7 @@ class Page(HTMLParser):
         super().__init__(convert_charrefs=True)
         self.title = ''; self.lang = ''; self.charset = ''; self.base = ''
         self.metas = []; self.headings = []; self.text = []; self.links = []
-        self.images = []; self.embedded = []; self.videos = []; self.video_sources = []
+        self.images = []; self.embedded = []; self.videos = []; self.audios = []; self.subtitles = []; self.video_sources = []
         self.blobs = []; self.js = []; self.css = []; self.icons = []; self.feeds = []
         self.forms = []; self.jsonld = []; self.inline = []; self.inline_styles = 0
         self.script = None; self.captures = []; self.media_stack = []
@@ -77,6 +102,7 @@ class Page(HTMLParser):
             entry = {'kind': tag, 'url': d.get('src') or d.get('data-src') or '',
                      'poster': d.get('poster', ''), 'sources': [], 'tracks': []}
             if tag == 'video': self.videos.append(entry)
+            else: self.audios.append(entry)
             self.media_stack.append(entry)
             if entry['url']:
                 self.embedded.append({'kind': tag, 'url': entry['url']})
@@ -98,6 +124,7 @@ class Page(HTMLParser):
                     self.video_sources.append({'origin': 'source', 'url': src, 'type': item['type']})
         if tag == 'track' and d.get('src'):
             track = {'url': d['src'], 'kind': d.get('kind',''), 'lang': d.get('srclang','')}
+            self.subtitles.append(track)
             if self.media_stack: self.media_stack[-1]['tracks'].append(track)
             self.embedded.append({'kind':'track','url':d['src']})
         if tag == 'iframe':
@@ -148,40 +175,126 @@ class Page(HTMLParser):
                 self.headings.append({'level':tag.upper(),'text':value})
             if self.captures: self.captures[-1]['parts'].append(value)
 
+def fetch_url(url, timeout):
+    """Fetch one HTML document; no additional URLs/resources are requested."""
+    if not shutil.which('curl'):
+        raise ValueError('curl is required to fetch URLs. Install curl or pass a downloaded HTML file.')
+    try:
+        parsed = urlsplit(url)
+        if parsed.scheme not in ('http','https') or not parsed.netloc or not parsed.hostname:
+            raise ValueError('URL must start with http:// or https:// and include a host')
+    except ValueError as exc:
+        raise ValueError('Invalid URL: ' + str(exc)) from exc
+    with tempfile.TemporaryDirectory(prefix='extracthtmlinfo-') as tmp:
+        out = os.path.join(tmp,'page.html')
+        cmd = ['curl','--silent','--show-error','--location','--fail',
+               '--max-redirs','5','--compressed',
+               '--connect-timeout',str(min(timeout,10)), '--max-time',str(timeout),
+               '--max-filesize',str(MAX_INPUT),
+               '--proto','=http,https','--proto-redir','=http,https',
+               '--output',out,'--write-out','%{http_code}\n%{url_effective}\n%{content_type}', url]
+        try:
+            proc = subprocess.run(cmd,stdin=subprocess.DEVNULL,stdout=subprocess.PIPE,
+                                  stderr=subprocess.PIPE,text=True,timeout=timeout+4,check=False)
+        except subprocess.TimeoutExpired as exc:
+            raise ValueError(f'Network timeout after {timeout}s. Check connectivity or use --timeout N.') from exc
+        fields = proc.stdout.splitlines()
+        code = fields[0] if fields else '000'
+        effective = fields[1] if len(fields)>1 and fields[1] else url
+        ctype = fields[2] if len(fields)>2 else ''
+        if proc.returncode:
+            reason = proc.stderr.strip() or 'unknown curl error'
+            if code.isdigit() and int(code)>=400:
+                raise ValueError(f'HTTP {code} for {effective}: {reason}')
+            if proc.returncode==63:
+                raise ValueError('Downloaded HTML exceeds the 8 MiB limit (curl error 63).')
+            raise ValueError(f'Unable to fetch {url} (curl exit {proc.returncode}): {reason}')
+        if not code.isdigit() or not 200<=int(code)<300:
+            raise ValueError(f'Unexpected HTTP status {code} for {effective}')
+        if ctype and not any(ctype.lower().split(';')[0].strip()==kind for kind in
+                             ('text/html','application/xhtml+xml','text/plain','application/xml','text/xml')):
+            raise ValueError(f'Response is not HTML (Content-Type: {ctype}).')
+        with open(out,'rb') as f: payload = f.read(MAX_INPUT+1)
+        if len(payload)>MAX_INPUT: raise ValueError('Downloaded HTML exceeds the 8 MiB limit.')
+        if not payload: raise ValueError(f'Empty HTTP response from {effective}.')
+    return payload, effective, code, ctype
+
 def cli():
-    parser = argparse.ArgumentParser(prog='extracthtmlinfo', description='Read-only HTML inspector: structured, human-readable page inventory (no JS executed).',
+    parser = argparse.ArgumentParser(prog='extracthtmlinfo',
+        description='Inspect HTML files, piped content or HTTP(S) URLs without executing JavaScript.',
         formatter_class=argparse.RawDescriptionHelpFormatter,
-        epilog='Examples:\n  extracthtmlinfo index.html\n  curl -fsSL https://example.org/ | extracthtmlinfo - --base-url https://example.org/\n  extracthtmlinfo index.html --sections media,discovery --all\n  extracthtmlinfo index.html --json > report.json\n\nA blob: URL is browser-local; this command reports it but cannot make it a permanent link.')
-    parser.add_argument('file', nargs='?', help='Local HTML file, or - to read stdin')
-    parser.add_argument('--base-url', default='', help='HTTP(S) origin for relative URLs')
-    parser.add_argument('--json', action='store_true', help='Full structured JSON (no terminal formatting)')
-    parser.add_argument('--sections', default=','.join(DEFAULT_SECTIONS), help='Comma-separated: '+','.join(SECTIONS))
-    parser.add_argument('--limit', type=int, default=10, help='Max rows per table (default: 10)')
-    parser.add_argument('--all', action='store_true', help='Show all rows in selected sections')
-    parser.add_argument('--no-color', action='store_true', help='Disable ANSI terminal colors')
-    parser.add_argument('--raw-urls', action='store_true', help='Keep sensitive URL query parameters (use cautiously)')
-    if len(sys.argv) == 1:
+        epilog='Examples:\n  extracthtmlinfo https://example.org/\n  extracthtmlinfo page.html --images --videos\n  extracthtmlinfo https://example.org --links --endpoints --json\n  curl -fsSL https://example.org | extracthtmlinfo - --base-url https://example.org/\n  extracthtmlinfo page.html --sections summary,media --all\n\nEach category flag can be combined with others. A blob: URL is temporary browser state, not a download link.')
+    parser.add_argument('file', nargs='?', help='HTML file, HTTP(S) URL, or - for stdin')
+    parser.add_argument('--base-url', default='', help='Base HTTP(S) URL for relative links')
+    parser.add_argument('--json', action='store_true', help='Output machine-readable JSON')
+    parser.add_argument('--sections', default=None, help='Comma-separated groups: '+','.join(SECTIONS))
+    parser.add_argument('--limit', type=int, default=10, help='Max displayed rows per table (default: 10)')
+    parser.add_argument('--all', action='store_true', help='Show all matching rows')
+    parser.add_argument('--no-color', action='store_true', help='Disable ANSI colors')
+    parser.add_argument('--raw-urls', action='store_true', help='Keep sensitive URL query values (caution)')
+    parser.add_argument('--timeout', type=int, default=25, help='Max URL download time in seconds (default: 25)')
+    parser.add_argument('--quiet', action='store_true', help='Suppress fetch progress; errors still shown')
+    group = parser.add_argument_group('data filters (combine freely)')
+    for flag in FILTERS:
+        group.add_argument('--'+flag, action='store_true', dest='only_'+flag.replace('-','_'),
+                           help='Extract '+flag.replace('-',' ')+' only (combinable)')
+    if len(sys.argv)==1:
         parser.print_help(); return 0
     args = parser.parse_args()
     if args.file is None:
         parser.print_help(); return 0
     if args.file == '-' and sys.stdin.isatty():
-        parser.print_help(); return 2
-    selected = [s.strip() for s in args.sections.split(',') if s.strip()]
-    if not selected or any(s not in SECTIONS for s in selected): parser.error('invalid --sections value')
-    if args.limit < 1: parser.error('--limit must be >= 1')
-    if args.base_url and urlsplit(args.base_url).scheme not in ('http','https'): parser.error('--base-url requires http(s)')
+        parser.error('stdin is a terminal; provide a file or URL, or pipe HTML into -')
+    if args.limit<1: parser.error('--limit must be >= 1')
+    if not 1<=args.timeout<=120: parser.error('--timeout must be between 1 and 120 seconds')
+    if args.base_url and (urlsplit(args.base_url).scheme not in ('http','https') or not urlsplit(args.base_url).hostname):
+        parser.error('--base-url requires a valid http(s) URL')
+    selection={}
+    def select(group, keys=None):
+        if group not in selection or keys is None:
+            selection[group]=None if keys is None else set(keys)
+        elif selection[group] is not None:
+            selection[group].update(keys)
+    if args.sections is not None:
+        names=[x.strip() for x in args.sections.split(',') if x.strip()]
+        if not names or any(x not in SECTIONS for x in names): parser.error('invalid --sections value; see --help')
+        for name in names: select(name)
+    active=[flag for flag in FILTERS if getattr(args,'only_'+flag.replace('-','_'))]
+    for flag in active: select(*FILTERS[flag])
+    if not selection:
+        for name in DEFAULT_SECTIONS: select(name)
+    selected=[name for name in SECTIONS if name in selection]
+    remote=args.file.lower().startswith(('http://','https://'))
+    status=None
     try:
-        if args.file != '-' and os.path.getsize(args.file) > MAX_INPUT: raise ValueError('HTML is larger than 8 MiB')
-        with (open(args.file,'rb') if args.file != '-' else sys.stdin.buffer) as f: payload = f.read(MAX_INPUT+1)
-        if len(payload) > MAX_INPUT: raise ValueError('HTML is larger than 8 MiB')
+        if remote:
+            if not args.quiet: print(f'[INFO] GET {args.file} (timeout {args.timeout}s; limit 8 MiB)',file=sys.stderr)
+            payload, final_url, http_code, content_type = fetch_url(args.file,args.timeout)
+            status={'requested_url':args.file,'http_status':http_code,'effective_url':final_url,
+                    'content_type':content_type,'bytes':len(payload)}
+            if not args.quiet: print(f'[OK] HTTP {http_code} • {len(payload)} bytes • {final_url}',file=sys.stderr)
+        else:
+            if '://' in args.file: raise ValueError('Unsupported URL scheme. Only http:// and https:// are allowed.')
+            if args.file!='-' and os.path.getsize(args.file)>MAX_INPUT:
+                raise ValueError('HTML file exceeds 8 MiB.')
+            with (open(args.file,'rb') if args.file!='-' else sys.stdin.buffer) as f:
+                payload=f.read(MAX_INPUT+1)
+            if len(payload)>MAX_INPUT: raise ValueError('HTML input exceeds 8 MiB.')
+            if not payload: raise ValueError('Empty HTML input. Check the file or curl pipeline.')
+            final_url=args.base_url
+            if not args.quiet and args.file!='-':
+                print(f'[OK] Read {len(payload)} bytes from {args.file}',file=sys.stderr)
+        if not re.search(rb'<(?:!doctype\s+html|html\b|[a-z][a-z0-9:-]*\b[^>]*>)',payload,re.I):
+            raise ValueError('Input does not look like HTML. Check the URL or source file.')
         encoding = re.search(r'charset\s*=\s*[\x22\x27]?([\w.-]+)',payload[:4096].decode('ascii','ignore'),re.I)
-        try: html = payload.decode(encoding.group(1) if encoding else 'utf-8-sig', 'replace')
+        try: html = payload.decode(encoding.group(1) if encoding else 'utf-8-sig','replace')
         except LookupError: html = payload.decode('utf-8-sig','replace')
-        page = Page(); page.feed(html); page.close()
-    except (OSError, ValueError) as e:
-        print('extracthtmlinfo: '+str(e),file=sys.stderr); return 1
-    base = urljoin(args.base_url,page.base) if page.base and args.base_url else page.base or args.base_url
+        page=Page(); page.feed(html); page.close()
+    except (OSError,ValueError,UnicodeError) as exc:
+        print('[ERROR] extracthtmlinfo: '+str(exc),file=sys.stderr)
+        print('[HINT] Try extracthtmlinfo --help for examples.',file=sys.stderr)
+        return 1
+    base = urljoin(final_url,page.base) if page.base and final_url else page.base or final_url
     def safe(url):
         if not url: return ''
         url = urljoin(base,url) if base else url
