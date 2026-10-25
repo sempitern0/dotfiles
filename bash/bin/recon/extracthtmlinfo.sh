@@ -2,7 +2,7 @@
 # Inspect local HTML without running JavaScript. Python 3 standard library only.
 set -euo pipefail
 command -v python3 >/dev/null || { echo 'extracthtmlinfo: python3 required' >&2; exit 1; }
-exec python3 - "$@" <<'PY'
+exec python3 -c "$(cat <<'PY'
 import argparse, json, os, re, sys
 from html.parser import HTMLParser
 from urllib.parse import urljoin, urlsplit, urlunsplit, parse_qsl, urlencode
@@ -137,3 +137,4 @@ def main():
 try: sys.exit(main())
 except BrokenPipeError: sys.exit(0)
 PY
+)" "$@"
