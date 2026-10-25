@@ -1,27 +1,29 @@
-# extracthtmlinfo — inspect a downloaded HTML document
+# extracthtmlinfo
 
-Read-only HTML inventory tool at `bash/bin/recon/extracthtmlinfo.sh`. The workstation setup automatically deploys it to `~/.local/bin/extracthtmlinfo` from its normal `bash/bin` discovery path.
+Static, read-only HTML inspector at `bash/bin/recon/extracthtmlinfo.sh`. The existing workstation setup installs it as `~/.local/bin/extracthtmlinfo` (without the .sh extension).
 
-**Requirements:** Bash and Python 3 (standard library). No packages from pip, network requests, JavaScript execution or browser automation.
+**Requirements:** Bash and Python 3 standard library. No pip packages, linked-resource downloads, JS execution or browser automation.
 
-## Examples
+## Usage
 
 ```bash
-extracthtmlinfo index.html
-extracthtmlinfo index.html --base-url https://example.org/app/
+extracthtmlinfo                         # show help; no hang
+extracthtmlinfo --help
+extracthtmlinfo page.html
 curl -fsSL --compressed https://example.org/ | extracthtmlinfo - --base-url https://example.org/
-extracthtmlinfo index.html --sections summary,links,assets,discovery
-extracthtmlinfo index.html --json > report.json
-extracthtmlinfo index.html --limit 50
-extracthtmlinfo index.html --all
+extracthtmlinfo page.html --sections summary,media,discovery --all
+extracthtmlinfo page.html --json > report.json
+extracthtmlinfo page.html --no-color --limit 20
 ```
 
-Shows title, language, charset, description, canonical URL, headings, paragraphs, anchors, image/media references, script and stylesheet references, icon/feed links, form method/action and **field names/types only**, basic metadata and JSON-LD types. Additionally reports possible endpoints and inline-script anti-debugging indicators as *heuristics* rather than confirmed browser activity.
+Pretty-print mode displays separate tables for headings, link text and destinations, images, video elements, video streams/sources, embedded players, scripts, stylesheets, forms, metadata, JSON-LD types, candidate endpoints and inline JavaScript indicators. Output is terminal-width aware and colors are used only on interactive terminals. `--json` provides all records in machine-readable form.
 
-`--base-url` resolves relative URL references. Since HTML downloaded with curl does not always include the original address, this flag is recommended. By default the script reads **local files or stdin**, never a live URL. This is intentional: the user controls fetching with curl.
+Video discovery covers `<video>`, nested `<source>`, `<track>`, `<iframe>`, `og:video`, Twitter-player metadata, JSON-LD VideoObject (`contentUrl` and `embedUrl`), and simple direct media references (`.mp4`, `.webm`, `.m3u8`, `.mpd`) embedded in inline scripts. Results are candidates, not verified playable URLs.
 
-**Privacy:** common sensitive query keys (token, auth, password, etc.) are redacted in extracted URLs; values from forms are never printed. The tool is *not* a secret-scanner and arbitrary sensitive text in HTML or metadata may still appear in reports, so review before sharing outputs.
+**Important:** `blob:` URLs are browser-session-local object URLs, not remote file addresses and cannot be converted mathematically to stable HTTP(S) links. The command reports them separately; if underlying MP4/HLS/DASH URLs already appear in the downloaded HTML, it lists those as candidates. It cannot recover runtime-generated media or replace permissions, login, signed URLs or DRM.
 
-**Limits:** 8 MiB input; no external script parsing, browser DOM execution, XHR history, or automatic API fetching. This inventory does not prove the existence of an anti-debugging mechanism.
+Use `--base-url` to resolve relative paths from downloaded HTML. Inputs can be a local file or `-` for stdin; no live network URL is downloaded directly by the tool.
 
-Test from the checkout with `bash tests/extracthtmlinfo-smoke.sh`.
+The parser does not print form field values, and redacts common sensitive URL query keys. It is not a comprehensive data-loss prevention tool: inspect generated reports before sharing them. Inputs are limited to 8 MiB.
+
+Run tests using `bash tests/extracthtmlinfo-smoke.sh`.
