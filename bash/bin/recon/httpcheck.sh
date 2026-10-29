@@ -13,7 +13,11 @@ TMP="$(mktemp)" || exit 1
 trap 'rm -f "$TMP"' EXIT INT TERM
 METRICS="$(curl -sSIL --connect-timeout 5 --max-time 15 --compressed \
     -D "$TMP" -o /dev/null \
-    -w '%{http_code}|%{time_total}|%{url_effective}' "$URL" 2>/dev/null || true)"
+    -w '%{http_code}|%{time_total}|%{url_effective}' --proto =http,https --proto-redir =http,https --url "$URL")" || {
+    rc=$?
+    printf 'HTTP connection failed (curl rc=%s): %s\n' "$rc" "$URL" >&2
+    exit "$rc"
+}
 [[ -n "$METRICS" ]] || { printf 'Connection failed: %s\n' "$URL" >&2; exit 1; }
 IFS='|' read -r CODE TOTAL FINAL <<<"$METRICS"
 
@@ -22,8 +26,11 @@ printf 'Requested : %s\nFinal     : %s\nStatus    : %s\nTime      : %ss\n' "$URL
 printf '\nRedirect chain:\n'
 grep -Ei '^(HTTP/|location:)' "$TMP" | sed 's/^/  /' || true
 
+FINAL_HEADERS="$(awk '/^HTTP\// { block=""; next } { block=block $0 ORS } END { printf "%s", block }' "$TMP")"
 printf '\nFinal response headers of interest:\n'
 for h in server content-type strict-transport-security content-security-policy x-frame-options x-content-type-options referrer-policy permissions-policy; do
-    value="$(grep -i "^${h}:" "$TMP" | tail -n1 | cut -d: -f2- | sed 's/^[[:space:]]*//' || true)"
+    value="$(grep -i "^${h}:" <<<"$FINAL_HEADERS" | tail -n1 | cut -d: -f2- | sed 's/^[[:space:]]*//' || true)"
     if [[ -n "$value" ]]; then printf '  %-28s %s\n' "$h" "$value"; else printf '  %-28s %s\n' "$h" '<missing/not-disclosed>'; fi
 done
+
+[[ "$CODE" =~ ^[23][0-9][0-9]$ ]] || exit 1

@@ -435,6 +435,8 @@ def cli():
         'links':{'total':len(links),'internal':sum((urlsplit(x['url']).hostname or '').removeprefix('www.')==hostname for x in links) if hostname else 0,'items':links},
         'media':{'images':normalize(page.images), 'embedded':normalize(page.embedded,('kind','url')),
                  'videos':[video_item(x) for x in page.videos],
+                 'audio':[video_item(x) for x in page.audios],
+                 'subtitles':normalize(page.subtitles),
                  'video_sources':normalize(page.video_sources,('url',)),
                  'blob_urls':unique([{'origin':x['origin'],'url':x['url']} for x in page.blobs],lambda x:x['url']),
                  'note':'blob: values identify temporary browser objects, not transferable download links.'},
@@ -447,6 +449,9 @@ def cli():
         'discovery':{'possible_endpoints':unique(candidates), 'inline_js_indicators':indicators,
                      'note':'Heuristic static extraction only; scripts loaded externally and browser network requests are not inspected.'}}
     result={k:result[k] for k in selected}
+    for group, keys in selection.items():
+        if keys is not None:
+            result[group]={key:value for key,value in result[group].items() if key in keys}
     if args.json:
         print(json.dumps(result,ensure_ascii=False,indent=2)); return 0
     color=sys.stdout.isatty() and not args.no_color and 'NO_COLOR' not in os.environ
@@ -496,25 +501,28 @@ def cli():
             value('total',d['total']);value('internal',d['internal'])
             table('Links',[('Text',2),('URL',5)],[(x['text'],x['url']) for x in d['items']])
         elif name=='media':
-            table('Images',[('Alt',2),('URL',5)],[(x.get('alt',''),x['url']) for x in d['images']])
-            table('Video elements',[('Kind',1),('URL',3),('Poster',2)],[(x['kind'],x['url'] or '(child sources)',x['poster']) for x in d['videos']])
-            table('Video streams / sources',[('Origin',2),('URL',5)],[(x['origin'],x['url']) for x in d['video_sources']])
-            table('Embeds and media tags',[('Tag',1),('URL',5)],[(x['kind'],x['url']) for x in d['embedded']])
-            table('Browser-only blob URLs',[('Origin',2),('URL',5)],[(x['origin'],x['url']) for x in d['blob_urls']])
-            if d['blob_urls']: value('Caution',d['note'])
+            if 'images' in d: table('Images',[('Alt',2),('URL',5)],[(x.get('alt',''),x['url']) for x in d['images']])
+            if 'videos' in d: table('Video elements',[('Kind',1),('URL',3),('Poster',2)],[(x['kind'],x['url'] or '(child sources)',x['poster']) for x in d['videos']])
+            if 'video_sources' in d: table('Video streams / sources',[('Origin',2),('URL',5)],[(x['origin'],x['url']) for x in d['video_sources']])
+            if 'embedded' in d: table('Embeds and media tags',[('Tag',1),('URL',5)],[(x['kind'],x['url']) for x in d['embedded']])
+            if 'blob_urls' in d: table('Browser-only blob URLs',[('Origin',2),('URL',5)],[(x['origin'],x['url']) for x in d['blob_urls']])
+            if d.get('blob_urls') and 'note' in d: value('Caution',d['note'])
+            if 'audio' in d: table('Audio elements',[('Kind',1),('URL',5)],[(x['kind'],x['url'] or '(child sources)') for x in d['audio']])
+            if 'subtitles' in d: table('Subtitles',[('Language',1),('URL',5)],[(x['lang'],x['url']) for x in d['subtitles']])
         elif name=='assets':
-            value('Inline scripts',d['inline_scripts']);value('Inline styles',d['inline_styles'])
+            if 'inline_scripts' in d: value('Inline scripts',d['inline_scripts'])
+            if 'inline_styles' in d: value('Inline styles',d['inline_styles'])
             for key in ('scripts','stylesheets','icons','feeds'):
-                table(key.capitalize(),[('Type',2),('URL',5)],[(x.get('type') or x.get('rel') or '',x['url']) for x in d[key]])
+                if key in d: table(key.capitalize(),[('Type',2),('URL',5)],[(x.get('type') or x.get('rel') or '',x['url']) for x in d[key]])
         elif name=='forms':
             table('Forms',[('Method',1),('Action',4),('Fields (names only)',3)],[(x['method'],x['action'],', '.join(z['name']+'('+z['type']+')' for z in x['fields'])) for x in d])
         elif name=='metadata':
-            table('Metadata',[('Key',2),('Value',5)],[(x['name'],x['value']) for x in d['meta']])
-            table('JSON-LD types',[('Type',1)],[(str(x['type']),) for x in d['json_ld']])
+            if 'meta' in d: table('Metadata',[('Key',2),('Value',5)],[(x['name'],x['value']) for x in d['meta']])
+            if 'json_ld' in d: table('JSON-LD types',[('Type',1)],[(str(x['type']),) for x in d['json_ld']])
         elif name=='discovery':
-            table('Possible endpoints',[('URL',1)],[(x,) for x in d['possible_endpoints']])
-            table('Script indicators',[('Indicator',1)],[(x,) for x in d['inline_js_indicators']])
-            value('Scope',d['note'])
+            if 'possible_endpoints' in d: table('Possible endpoints',[('URL',1)],[(x,) for x in d['possible_endpoints']])
+            if 'inline_js_indicators' in d: table('Script indicators',[('Indicator',1)],[(x,) for x in d['inline_js_indicators']])
+            if 'note' in d: value('Scope',d['note'])
     return 0
 
 try: sys.exit(cli())

@@ -17,7 +17,7 @@ pkg_upgrade() {
 pkg_remove() { run_as_root zypper --non-interactive remove "$@"; }
 
 DISTRO_PACKAGES_CORE=(
-    bash bash-completion ca-certificates curl wget git vim openssl less man
+    bash bash-completion ca-certificates curl wget git openssl less man
     unzip zip tar xz rsync jq tree file openssh
 )
 DISTRO_PACKAGES_DEV=(
@@ -37,3 +37,7 @@ DISTRO_PACKAGES_SECURITY=(
 DISTRO_PACKAGES_PRIVACY=(
     tor torsocks
 )
+
+DISTRO_PACKAGES_WORKSTATION=( xdg-utils xdg-user-dirs desktop-file-utils shared-mime-info fontconfig google-noto-sans-fonts )
+
+DISTRO_PACKAGES_EDITOR=( vim )

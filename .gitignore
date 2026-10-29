@@ -41,3 +41,5 @@ Thumbs.db
 *.sig
 pkg/
 src/
+__pycache__/
+*.py[cod]

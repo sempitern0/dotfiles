@@ -25,15 +25,15 @@ ensure_target_dir() {
     [[ -d "$dir" ]] && existed=1
     mkdir -p "$dir" || return 1
     if (( existed == 0 )); then
-        chmod "$mode" "$dir" 2>/dev/null || true
+        chmod "$mode" "$dir" || return 1
     fi
     if (( EUID == 0 )) && [[ -n "${TARGET_USER:-}" ]]; then
-        chown "$TARGET_USER:${TARGET_GROUP:-$(id -gn "$TARGET_USER" 2>/dev/null || printf '%s' "$TARGET_USER")}" "$dir" 2>/dev/null || true
+        chown "$TARGET_USER:${TARGET_GROUP:-$(id -gn "$TARGET_USER" 2>/dev/null || printf '%s' "$TARGET_USER")}" "$dir" || return 1
     fi
 }
 
 ui_has_tty() {
-    [[ ( -t 0 || -t 1 || -t 2 ) && -r /dev/tty && -w /dev/tty ]]
+    (: </dev/tty) 2>/dev/null
 }
 
 ui_color_init() {
@@ -204,8 +204,8 @@ run_task() {
         msg_success "$label"
     else
         rc=$?
-        record_result WARN "$label" "rc=$rc"
-        msg_warn "$label finished with rc=$rc; the assistant will continue."
+        record_result FAIL "$label" "rc=$rc"
+        msg_error "$label failed with rc=$rc; remaining tasks will still be attempted."
     fi
     return 0
 }
@@ -230,7 +230,8 @@ is_wsl() {
 }
 
 is_container() {
-    command_exists systemd-detect-virt && systemd-detect-virt --container >/dev/null 2>&1
+    [[ -e /.dockerenv || -e /run/.containerenv ]] ||
+        { command_exists systemd-detect-virt && systemd-detect-virt --container >/dev/null 2>&1; }
 }
 
 is_desktop_environment() {
@@ -259,7 +260,7 @@ detect_distribution() {
         *debian*|*ubuntu*) OS_FAMILY="debian" ;;
         *arch*) OS_FAMILY="arch" ;;
         *fedora*|*rhel*|*centos*) OS_FAMILY="fedora" ;;
-        *suse*|*opensuse*) OS_FAMILY="opensuse" ;;
+        *suse*) OS_FAMILY="opensuse" ;;
         *)
             command_exists apt-get && OS_FAMILY="debian"
             [[ "$OS_FAMILY" == unknown ]] && command_exists pacman && OS_FAMILY="arch"
@@ -295,7 +296,10 @@ resolve_target_user() {
         fi
     fi
 
-    [[ -n "$candidate" ]] || candidate="${USER:-$(id -un 2>/dev/null || printf root)}"
+    [[ -n "$candidate" ]] || candidate="$(id -un)"
+    if (( EUID != 0 )) && [[ "$candidate" != "$(id -un)" ]]; then
+        msg_error "Run as the target account, or use sudo with --user USER."; return 1
+    fi
     TARGET_USER="$candidate"
 
     if ! id "$TARGET_USER" >/dev/null 2>&1; then
@@ -308,6 +312,7 @@ resolve_target_user() {
     TARGET_HOME="$(printf '%s' "$passwd_entry" | awk -F: '{print $6}')"
     TARGET_SHELL="$(printf '%s' "$passwd_entry" | awk -F: '{print $7}')"
     [[ -n "$TARGET_HOME" ]] || TARGET_HOME="$( [[ "$TARGET_USER" == root ]] && printf /root || printf '/home/%s' "$TARGET_USER" )"
+    [[ "$TARGET_HOME" == /* && "$TARGET_HOME" != / ]] || { msg_error "Invalid home directory for $TARGET_USER"; return 1; }
     [[ -n "$TARGET_SHELL" ]] || TARGET_SHELL="${SHELL:-/bin/bash}"
     TARGET_GROUP="$(id -gn "$TARGET_USER" 2>/dev/null || printf '%s' "$TARGET_USER")"
     export TARGET_USER TARGET_HOME TARGET_GROUP TARGET_SHELL
@@ -355,6 +360,10 @@ run_as_target() {
 
 load_distro_module() {
     local root="$1" module=""
+    if is_immutable_host; then
+        msg_warn "Immutable/transactional host: package changes disabled. Use --user-only and the native image/toolbox workflow."
+        return 1
+    fi
     module="${root}/bash/distros/${OS_FAMILY}.sh"
     [[ -r "$module" ]] || {
         msg_error "No package module for OS family '$OS_FAMILY': $module"
@@ -362,6 +371,7 @@ load_distro_module() {
     }
     # shellcheck disable=SC1090
     source "$module"
+    command_exists "$DISTRO_PACKAGE_MANAGER" || { msg_error "Package manager missing: $DISTRO_PACKAGE_MANAGER"; return 1; }
 }
 
 pkg_refresh_once() {
@@ -388,11 +398,18 @@ filter_available_packages() {
 
 install_packages() {
     (($#)) || return 0
-    pkg_refresh_once || msg_warn "Repository metadata refresh failed; trying package installation with current metadata."
+    local -a pending=()
+    local package
+    for package in "$@"; do
+        pkg_installed "$package" || pending+=("$package")
+    done
+    ((${#pending[@]})) || { msg_info "All requested packages are already installed."; return 0; }
+    pkg_refresh_once || { msg_error "Repository refresh failed. Check connectivity, repository configuration and package-manager locks; retry later."; return 1; }
+    set -- "${pending[@]}"
     filter_available_packages "$@"
     ((${#VALID_PACKAGES[@]})) || {
         msg_warn "No requested packages are available from configured repositories."
-        return 0
+        return 1
     }
     msg_exec "Installing ${#VALID_PACKAGES[@]} package(s) from configured distribution repositories."
     if pkg_install "${VALID_PACKAGES[@]}"; then
@@ -433,6 +450,7 @@ backup_path() {
 
 copy_with_backup() {
     local src="$1" dest="$2" owner="${3:-${TARGET_USER:-root}}" mode="${4:-}" tmp=""
+    [[ ! -d "$dest" ]] || { msg_error "Refusing to replace directory: $dest"; return 1; }
     [[ -f "$src" ]] || { msg_error "Source file not found: $src"; return 1; }
     mkdir -p "$(dirname "$dest")" || return 1
     backup_path "$dest" || { msg_error "Backup failed; leaving $dest unchanged."; return 1; }
@@ -482,4 +500,9 @@ file_sha256() {
     else
         printf 'unavailable'
     fi
+}
+
+# Image-based hosts need their native deployment workflow, even if dnf/zypper exists.
+is_immutable_host() {
+    [[ -e /run/ostree-booted || -r /etc/NIXOS ]] || command_exists transactional-update
 }

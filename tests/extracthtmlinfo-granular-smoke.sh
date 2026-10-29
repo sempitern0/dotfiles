@@ -6,9 +6,9 @@ tool="$root/bash/bin/recon/extracthtmlinfo.sh"
 tmp="$(mktemp -d)"
 trap 'rm -rf "$tmp"' EXIT
 echo '<!doctype html><html><head><title>Test</title></head><body><video src="/film.mp4"></video><img src="/x.png"><a href="/a">A</a></body></html>' > "$tmp/page.html"
-"$tool" > "$tmp/help"
+bash "$tool" > "$tmp/help"
 grep -q 'usage: extracthtmlinfo' "$tmp/help"
-"$tool" "$tmp/page.html" --base-url https://example.org/ --videos --images --json --quiet > "$tmp/report.json"
+bash "$tool" "$tmp/page.html" --base-url https://example.org/ --videos --images --json --quiet > "$tmp/report.json"
 python3 - "$tmp/report.json" <<'PY'
 import json,sys
 r=json.load(open(sys.argv[1]))

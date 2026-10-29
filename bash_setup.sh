@@ -13,7 +13,7 @@ SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" >/dev/null 2>&1 && pwd -
 # shellcheck source=lib/common.sh
 source "$SCRIPT_DIR/lib/common.sh"
 
-SCRIPT_VERSION="2.1.0-shell-parity"
+SCRIPT_VERSION="2.2.0-desktop"
 OS_MODULE_LOADED=0
 
 usage() {
@@ -25,6 +25,9 @@ Usage:
   ./bash_setup.sh --minimal       shell + Git + utilities + minimal official packages
   ./bash_setup.sh --recommended   developer/sysadmin workstation; Vim excluded
   ./bash_setup.sh --full          all dotfiles modules, including Vim and optional desktop tools
+  ./bash_setup.sh --desktop       recommended + graphical desktop integration
+  ./bash_setup.sh --user-only     deploy shell/Git/SSH/commands without package changes
+  ./bash_setup.sh --plan          read-only package groups and deployment plan
   ./bash_setup.sh --status        read-only readiness/status view
   ./bash_setup.sh --hardening     open the system hardening assistant
   ./bash_setup.sh --user USER     explicitly choose the account receiving dotfiles
@@ -69,8 +72,8 @@ start_workstation_evidence() {
     ensure_target_dir "$DOTFILES_STATE_HOME/runs" 0700 || return 1
     ensure_target_dir "$run_dir" 0700 || return 1
     DOTFILES_RESULT_FILE="$run_dir/results.tsv"
-    : >"$DOTFILES_RESULT_FILE"
-    chmod 0600 "$DOTFILES_RESULT_FILE"
+    : >"$DOTFILES_RESULT_FILE" || return 1
+    chmod 0600 "$DOTFILES_RESULT_FILE" || return 1
     (( EUID == 0 )) && chown "$TARGET_USER:$TARGET_GROUP" "$DOTFILES_RESULT_FILE" 2>/dev/null || true
 }
 
@@ -189,6 +192,8 @@ configure_git() {
     copy_with_backup "$SCRIPT_DIR/git/.gitconfig" "$managed" "$TARGET_USER" 0644 || return 1
 
     # Preserve the user's ~/.gitconfig. Add a single managed include if missing.
+    backup_path "$TARGET_HOME/.gitconfig" || return 1
+    backup_path "$TARGET_HOME/.config/git/config" || return 1
     if ! run_as_target git config --global --get-all include.path 2>/dev/null | grep -Fxq "$managed"; then
         run_as_target git config --global --add include.path "$managed" || return 1
     fi
@@ -220,22 +225,25 @@ configure_ssh_client() {
 
     copy_with_backup "$SCRIPT_DIR/git/ssh/config" "$conf_dir/90-dotfiles.conf" "$TARGET_USER" 0600 || return 1
 
-    # OpenSSH supports Include. Preserve personal hosts/keys in the user's main file.
-    local include_line='Include ~/.ssh/conf.d/*.conf'
+    # OpenSSH uses the first value. User Host/Match rules must precede defaults.
+    # Host * also resets any trailing Host/Match context before the Include.
+    local include_line='Include ~/.ssh/conf.d/*.conf' tmp
+    backup_path "$main" || return 1
+    tmp="$(mktemp)" || return 1
     if [[ -e "$main" ]]; then
-        backup_path "$main" || return 1
-        grep -Fqx "$include_line" "$main" 2>/dev/null || {
-            local tmp="${main}.dotfiles.$$"
-            { printf '%s\n\n' "$include_line"; cat "$main"; } >"$tmp"
-            chmod 0600 "$tmp"
-            (( EUID == 0 )) && chown "$TARGET_USER:$TARGET_GROUP" "$tmp" 2>/dev/null || true
-            mv -f "$tmp" "$main"
-        }
-    else
-        printf '%s\n' "$include_line" >"$main"
-        chmod 0600 "$main"
-        (( EUID == 0 )) && chown "$TARGET_USER:$TARGET_GROUP" "$main" 2>/dev/null || true
+        if ! awk -v managed="$include_line" '
+            $0 == "# BEGIN DOTFILES SSH DEFAULTS" { block=1; next }
+            $0 == "# END DOTFILES SSH DEFAULTS" { block=0; next }
+            !block && $0 != managed { print }
+        ' "$main" >"$tmp"; then
+            rm -f -- "$tmp"; return 1
+        fi
     fi
+    printf '# BEGIN DOTFILES SSH DEFAULTS\nHost *\n    %s\n# END DOTFILES SSH DEFAULTS\n' "$include_line" >>"$tmp"
+    copy_with_backup "$tmp" "$main" "$TARGET_USER" 0600
+    local rc=$?
+    rm -f -- "$tmp"
+    (( rc == 0 )) || return "$rc"
 
     if command_exists ssh; then
         run_as_target ssh -G github.com >/dev/null 2>&1 || msg_warn "OpenSSH client did not accept the generated include; inspect $main."
@@ -273,7 +281,7 @@ install_group() {
     local group="$1"
     require_package_provider || return 1
     package_group_install "$group" || return 1
-    [[ "$group" == "admin" ]] && configure_command_shims || true
+    if [[ "$group" == admin ]]; then configure_command_shims; fi
 }
 
 install_desktop_group() {
@@ -364,6 +372,41 @@ run_hardening_assistant() {
     fi
 }
 
+
+profile_user_only() {
+    run_task "Shell environment (Bash/Zsh)" configure_shell
+    run_task "Git and SSH client defaults" configure_git_ssh
+    run_task "Portable custom commands" configure_commands
+}
+
+profile_desktop() {
+    if ! is_desktop_environment || is_container; then
+        record_result FAIL "Desktop profile" "No graphical host detected; use --recommended or --user-only."
+        msg_error "Desktop profile needs a graphical host. No profile tasks were run."
+        return 1
+    fi
+    profile_recommended
+    run_task "Desktop utilities and fonts" install_group workstation
+}
+
+deployment_plan() {
+    printf 'Target: %s (%s)\nPackage manager: %s\n' "$TARGET_USER" "$TARGET_HOME" "${DISTRO_PACKAGE_MANAGER:-disabled}"
+    printf 'No changes made. Profiles replace managed user files after backup.\n'
+    printf 'No desktop environment, display manager or default applications are replaced.\n'
+    local group var
+    if (( OS_MODULE_LOADED )); then
+        for group in CORE DEV ADMIN DESKTOP WORKSTATION; do
+            var="DISTRO_PACKAGES_$group"
+            local -n packages="$var"
+            printf '\n%s (availability checked only when installing):\n' "$group"
+            printf '  %s\n' "${packages[@]}"
+        done
+    else
+        printf 'Package operations unavailable; --user-only remains available.\n'
+    fi
+    printf '\nBackups: %s\n' "$DOTFILES_BACKUP_HOME"
+}
+
 profile_minimal() {
     run_task "Core distribution packages" install_group core
     run_task "Shell environment (Bash/Zsh)" configure_shell
@@ -383,6 +426,7 @@ profile_recommended() {
 
 profile_full() {
     profile_recommended
+    run_task "Vim packages" install_group editor
     run_task "Vim profile" configure_vim
 }
 
@@ -402,6 +446,9 @@ execute_option() {
         12|privacy|tor) run_task "Privacy tools" configure_privacy_tools ;;
         13|upgrade|update) run_task "System package upgrade" upgrade_system ;;
         14|status|audit) status_report ;;
+        16|desktop-profile) profile_desktop ;;
+        17|user-only) profile_user_only ;;
+        18|plan) deployment_plan ;;
         15|hardening|hard) run_hardening_assistant ;;
         0|q|quit|exit) return 20 ;;
         *) msg_warn "Unknown selection: $1" ;;
@@ -433,6 +480,9 @@ interactive_menu() {
         ui_menu_item "13" "System upgrade" "Explicit package-manager upgrade" "$C_YELLOW" "CONFIRM"
         ui_menu_item "14" "Readiness / status" "Read-only inventory and shell deployment check"
         ui_menu_item "15" "Hardening workspace" "Security profiles, firewall and rollback" "$C_RED" "POLICY"
+        ui_menu_item "16" "Desktop profile" "Recommended + XDG/clipboard/fonts for graphical hosts"
+        ui_menu_item "17" "User files only" "Offline/immutable host; no package operations"
+        ui_menu_item "18" "Deployment plan" "Read-only package/deployment preview"
         ui_menu_item "0" "Exit" "Leave the assistant" "$C_RED"
         ui_rule
 
@@ -451,31 +501,45 @@ interactive_menu() {
 }
 
 main() {
-    local mode="interactive"
+    (( BASH_VERSINFO[0] > 4 || (BASH_VERSINFO[0] == 4 && BASH_VERSINFO[1] >= 3) )) || { printf 'Bash 4.3+ required.\n' >&2; return 2; }
+    local mode="interactive" previous_mode
     while (($#)); do
+        previous_mode="$mode"
         case "$1" in
+            --desktop) mode="desktop" ;;
+            --user-only) mode="user-only" ;;
+            --plan) mode="plan" ;;
             --minimal) mode="minimal" ;;
             --recommended) mode="recommended" ;;
             --full|--all) mode="full" ;;
             --status|--audit) mode="status" ;;
             --hardening) mode="hardening" ;;
             --user)
-                [[ $# -ge 2 ]] || { msg_error "--user requires an account name."; return 2; }
+                [[ $# -ge 2 && -n "$2" && "$2" != --* ]] || { msg_error "--user requires an account name."; return 2; }
                 DOTFILES_TARGET_USER="$2"
                 shift
                 ;;
-            --user=*) DOTFILES_TARGET_USER="${1#*=}" ;;
+            --user=*) DOTFILES_TARGET_USER="${1#*=}"; [[ -n "$DOTFILES_TARGET_USER" ]] || { msg_error "--user requires an account name."; return 2; } ;;
             --no-color) DOTFILES_NO_COLOR=1; ui_color_init ;;
             --help|-h) usage; return 0 ;;
             *) msg_error "Unknown argument: $1"; usage >&2; return 2 ;;
         esac
+        if [[ "$previous_mode" != interactive && "$previous_mode" != "$mode" ]]; then
+            msg_error "Choose one profile or read-only mode per invocation."; return 2
+        fi
         shift
     done
 
+    if [[ "$mode" == interactive ]] && ! ui_has_tty; then
+        msg_error "Interactive mode requires a controlling terminal. Use --plan or --status."; return 2
+    fi
     prepare_context || return 1
-    [[ "$mode" == "status" ]] || start_workstation_evidence
+    if [[ "$mode" != status && "$mode" != plan ]]; then start_workstation_evidence || return 1; fi
     local rc=0
     case "$mode" in
+        plan) deployment_plan ;;
+        desktop) profile_desktop; show_run_summary ;;
+        user-only) profile_user_only; show_run_summary ;;
         minimal) profile_minimal; show_run_summary ;;
         recommended) profile_recommended; show_run_summary ;;
         full) profile_full; show_run_summary ;;
@@ -484,6 +548,7 @@ main() {
         interactive) interactive_menu || rc=$? ;;
     esac
 
+    (( TASK_FAIL == 0 )) || rc=1
     if (( rc == 0 && TASK_PASS > 0 )) && [[ "$mode" != "status" && "$mode" != "hardening" ]]; then
         printf '\n'
         msg_info "Open a new login shell (for example: exec ${TARGET_SHELL##*/} -l) to activate the managed shell layer."

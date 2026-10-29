@@ -11,7 +11,7 @@ pkg_upgrade() { run_as_root dnf upgrade -y; }
 pkg_remove() { run_as_root dnf remove -y "$@"; }
 
 DISTRO_PACKAGES_CORE=(
-    bash bash-completion ca-certificates curl wget git vim-enhanced openssl less man-db
+    bash bash-completion ca-certificates curl wget git openssl less man-db
     unzip zip tar xz rsync jq tree file openssh-clients
 )
 DISTRO_PACKAGES_DEV=(
@@ -32,3 +32,7 @@ DISTRO_PACKAGES_SECURITY=(
 DISTRO_PACKAGES_PRIVACY=(
     tor torsocks
 )
+
+DISTRO_PACKAGES_WORKSTATION=( xdg-utils xdg-user-dirs desktop-file-utils shared-mime-info fontconfig google-noto-sans-fonts )
+
+DISTRO_PACKAGES_EDITOR=( vim-enhanced )

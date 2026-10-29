@@ -1,0 +1,21 @@
+name: Dotfiles offline regression tests
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  verify:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install static analyzer
+        run: sudo apt-get update && sudo apt-get install -y shellcheck
+      - name: Syntax, temporary-file and loopback HTTP tests
+        run: python3 tools/verify.py --require-shellcheck

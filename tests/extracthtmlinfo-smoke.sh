@@ -14,15 +14,15 @@ cat >"$TMP/page.html" <<'HTML'
 <form><input name="inside" value="private-input"></form><input name="outside">
 </body></html>
 HTML
-"$TOOL" >"$TMP/help"
+bash "$TOOL" >"$TMP/help"
 grep -q 'QUICK EXAMPLES' "$TMP/help"
 grep -q -- '--video-sources' "$TMP/help"
-"$TOOL" --help >"$TMP/extended"
+bash "$TOOL" --help >"$TMP/extended"
 grep -q 'Images, video and audio filters' "$TMP/extended"
 grep -q 'Form actions, methods and field names' "$TMP/extended"
-if "$TOOL" --videos >"$TMP/stdout" 2>"$TMP/stderr"; then exit 1; fi
+if bash "$TOOL" --videos >"$TMP/stdout" 2>"$TMP/stderr"; then exit 1; fi
 grep -q 'missing FILE or URL' "$TMP/stderr"
-"$TOOL" "$TMP/page.html" --base-url https://example.org/ --json --quiet >"$TMP/result.json"
+bash "$TOOL" "$TMP/page.html" --base-url https://example.org/ --json --quiet >"$TMP/result.json"
 python3 - "$TMP/result.json" <<'PY'
 import json,sys
 d=json.load(open(sys.argv[1]))
@@ -36,16 +36,16 @@ assert d['media']['videos'][0]['sources'][0]['url']=='https://example.org/clip.w
 assert any(x['url'].startswith('blob:') for x in d['media']['blob_urls'])
 assert 'https://example.org/api/items' in d['discovery']['possible_endpoints']
 PY
-"$TOOL" "$TMP/page.html" --images --videos --json --quiet >"$TMP/filtered.json"
+bash "$TOOL" "$TMP/page.html" --images --videos --json --quiet >"$TMP/filtered.json"
 python3 - "$TMP/filtered.json" <<'PY'
 import json,sys
 d=json.load(open(sys.argv[1]))
 assert list(d)==['media'] and set(d['media'])=={'images','videos','video_sources'}
 PY
-cat "$TMP/page.html" | "$TOOL" - --sections summary --quiet | grep -q 'Vídeo'
+cat "$TMP/page.html" | bash "$TOOL" - --sections summary --quiet | grep -q 'Vídeo'
 for opt in '--limit 0' '--sections invalid' '--timeout 0'; do
     read -r -a params <<< "$opt"
-    if "$TOOL" "$TMP/page.html" "${params[@]}" >/dev/null 2>"$TMP/error"; then exit 1; fi
+    if bash "$TOOL" "$TMP/page.html" "${params[@]}" >/dev/null 2>"$TMP/error"; then exit 1; fi
     grep -Eq 'error:|ERROR' "$TMP/error"
 done
 python3 - "$TOOL" <<'PY'

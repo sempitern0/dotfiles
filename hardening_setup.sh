@@ -50,46 +50,54 @@ prepare_context() {
 }
 
 start_hardening_evidence() {
-    mkdir -p /var/log/dotfiles-hardening
-    chmod 0700 /var/log/dotfiles-hardening
+    mkdir -p /var/log/dotfiles-hardening || return 1
+    chmod 0700 /var/log/dotfiles-hardening || return 1
     DOTFILES_RESULT_FILE="/var/log/dotfiles-hardening/run-$DOTFILES_RUN_ID.tsv"
-    : >"$DOTFILES_RESULT_FILE"
-    chmod 0600 "$DOTFILES_RESULT_FILE"
+    : >"$DOTFILES_RESULT_FILE" || return 1
+    chmod 0600 "$DOTFILES_RESULT_FILE" || return 1
 }
 
 hardening_snapshot_init() {
     [[ -n "$HARDENING_SNAPSHOT" ]] && return 0
-    HARDENING_SNAPSHOT="$HARDENING_ROOT/$DOTFILES_RUN_ID"
-    HARDENING_MANIFEST="$HARDENING_SNAPSHOT/paths.tsv"
-    HARDENING_SERVICES="$HARDENING_SNAPSHOT/services.tsv"
-    mkdir -p "$HARDENING_SNAPSHOT/rootfs" "$HARDENING_SNAPSHOT/evidence"
-    chmod 0700 "$HARDENING_SNAPSHOT" "$HARDENING_SNAPSHOT/rootfs" "$HARDENING_SNAPSHOT/evidence"
-    : >"$HARDENING_MANIFEST"
-    : >"$HARDENING_SERVICES"
+    local snapshot="$HARDENING_ROOT/$DOTFILES_RUN_ID"
+    mkdir -p "$snapshot/rootfs" "$snapshot/evidence" || return 1
+    chmod 0700 "$snapshot" "$snapshot/rootfs" "$snapshot/evidence" || return 1
+    : >"$snapshot/paths.tsv" || return 1
+    : >"$snapshot/services.tsv" || return 1
     {
         printf 'created=%s\n' "$(date -Is)"
         printf 'host=%s\n' "$(hostname -f 2>/dev/null || hostname)"
         printf 'os=%s\n' "${OS_PRETTY:-unknown}"
         printf 'target_user=%s\n' "$TARGET_USER"
         printf 'version=%s\n' "$SCRIPT_VERSION"
-    } >"$HARDENING_SNAPSHOT/metadata.txt"
+    } >"$snapshot/metadata.txt" || return 1
+    # Publish initialized state only after all required evidence files exist.
+    HARDENING_SNAPSHOT="$snapshot"
+    HARDENING_MANIFEST="$snapshot/paths.tsv"
+    HARDENING_SERVICES="$snapshot/services.tsv"
     msg_info "Recovery snapshot: $HARDENING_SNAPSHOT"
 }
 
 hardening_backup_path() {
-    local path="$1" key="$1" rel="${1#/}" dst=""
+    local path="$1" key="$1" rel="${1#/}" dst="" staging=""
     hardening_snapshot_init || return 1
     [[ -z "${HARDENING_BACKED[$key]:-}" ]] || return 0
-    HARDENING_BACKED[$key]=1
 
     if [[ -e "$path" || -L "$path" ]]; then
         dst="$HARDENING_SNAPSHOT/rootfs/$rel"
-        mkdir -p "$(dirname "$dst")"
-        cp -a -- "$path" "$dst" || return 1
-        printf 'PRESENT\t%s\n' "$path" >>"$HARDENING_MANIFEST"
+        mkdir -p "$(dirname "$dst")" || return 1
+        staging="$(mktemp -d "${dst}.backup.XXXXXX")" || return 1
+        if ! cp -a -- "$path" "$staging/original"; then rm -rf -- "$staging"; return 1; fi
+        if ! mv -- "$staging/original" "$dst"; then rm -rf -- "$staging"; return 1; fi
+        rmdir -- "$staging" || return 1
+        if ! printf 'PRESENT\t%s\n' "$path" >>"$HARDENING_MANIFEST"; then
+            rm -rf -- "$dst"; return 1
+        fi
     else
-        printf 'ABSENT\t%s\n' "$path" >>"$HARDENING_MANIFEST"
+        printf 'ABSENT\t%s\n' "$path" >>"$HARDENING_MANIFEST" || return 1
     fi
+    # Failed/partial copies must never authorize a later policy write.
+    HARDENING_BACKED[$key]=1
 }
 
 hardening_restore_path_from_current_snapshot() {
@@ -706,7 +714,7 @@ main() {
     done
 
     prepare_context || return 1
-    [[ "$mode" == "audit" ]] || start_hardening_evidence
+    if [[ "$mode" != audit ]]; then start_hardening_evidence || return 1; fi
     local rc=0
     case "$mode" in
         audit) security_audit || rc=$? ;;
@@ -715,7 +723,8 @@ main() {
         restore) restore_snapshot_menu || rc=$? ;;
         interactive) interactive_menu || rc=$? ;;
     esac
-    hardening_finalize_snapshot
+    hardening_finalize_snapshot || rc=1
+    (( TASK_FAIL == 0 )) || rc=1
     return "$rc"
 }
 

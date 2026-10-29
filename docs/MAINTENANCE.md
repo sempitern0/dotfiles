@@ -27,3 +27,33 @@ Tests do not install packages or alter system policy.
 Distribution-specific package installation, Zsh sessions, firewall/SSH changes and
 system recovery still require disposable target hosts. The changes here concern
 user-file deployment, not a redesign of the separate hardening snapshot engine.
+
+## Desktop and operational review · 2026-10-29
+
+[Deployment / Despliegue](DESKTOP.md)
+
+- Added a dedicated desktop profile, read-only plan and user-only deployment.
+- Blocked package providers on immutable/transactional hosts and checked actual
+  package-manager availability. Installed groups skip refresh; refresh failures stop.
+- Made failed tasks visible as FAIL and reflected them in both assistants' exit status.
+- Preserved personal SSH precedence with an idempotent managed block at the end.
+- Prevented directory destinations from accepting configuration files accidentally.
+- Fixed hardening snapshot retry: partial copies never count as complete backups.
+- Made Vim package installation explicit in the full profile, outside core packages.
+- Fixed HTTP false success on connection errors and stale redirect-header attribution.
+- Repaired existing HTML filter regressions exposed by running the dormant tests:
+  granular JSON/text selection and audio/subtitle output now match the advertised flags.
+- Existing extractor smoke tests now invoke Bash, matching tracked non-executable files.
+- Added an offline verifier and CI with ShellCheck at error severity; warnings/style
+  debt are not a zero-warning certification.
+
+Run `python3 tools/verify.py --require-shellcheck`. Tests exercise temporary user
+files, failed backup/refresh operations, desktop gates, SSH precedence and idempotency,
+profile exit status, HTML filters and loopback-only HTTP redirects/errors. No package
+transaction or hardening policy is executed. Graphical desktop, package-manager,
+Windows, domain and full host recovery acceptance were not performed here.
+
+Resumen: nuevos perfiles desktop/user-only/plan; errores propagados, prioridades SSH
+conservadas, copias de hardening recuperables tras fallos y diagnósticos HTTP/HTML
+corregidos. Las pruebas son aisladas; sigue pendiente la aceptación nativa de cada
+distribución y sus políticas de recuperación.

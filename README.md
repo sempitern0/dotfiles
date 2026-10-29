@@ -5,6 +5,8 @@ and optional Vim. Packages come from your distribution's configured repositories
 
 **English** · [Español](README_ES.md) · [Full reference](docs/REFERENCE.md)
 
+[Desktop profiles, compatibility and failures](docs/DESKTOP.md) · [Validation](docs/MAINTENANCE.md)
+
 ## Start here
 
 Requirements: Linux, Bash 4.3+, Git, and an existing user account. Supported package
@@ -14,8 +16,9 @@ request `sudo` when necessary.
 ```bash
 git clone https://github.com/sempitern0/dotfiles.git
 cd dotfiles
+./bash_setup.sh --plan
 ./bash_setup.sh --status
-./bash_setup.sh --recommended
+./bash_setup.sh --desktop     # from a graphical desktop terminal
 ```
 
 Open a new terminal after setup. Prefer the menu? Run `./bash_setup.sh`.
@@ -26,6 +29,9 @@ receives a managed include while preserving the existing `.zshrc`.
 
 | Command | Result |
 |---|---|
+| `./bash_setup.sh --plan` | Preview package groups and deployment without changes |
+| `./bash_setup.sh --user-only` | Deploy user files using existing tools; no package operations |
+| `./bash_setup.sh --desktop` | Recommended + XDG/MIME utilities and fonts on graphical hosts |
 | `./bash_setup.sh --status` | Read-only readiness; installs nothing |
 | `./bash_setup.sh --minimal` | Core packages, shell, Git/SSH client and utilities |
 | `./bash_setup.sh --recommended` | Minimal + development, diagnostics and terminal productivity |
@@ -33,6 +39,10 @@ receives a managed include while preserving the existing `.zshrc`.
 | `./bash_setup.sh --user alice --recommended` | Explicit target account, useful from elevated shells |
 | `sudo ./hardening_setup.sh --audit` | Inspect system security posture |
 | `sudo ./hardening_setup.sh --recommended` | Apply the separate workstation hardening baseline |
+
+The desktop profile preserves your desktop environment, default applications and drivers.
+Immutable/transactional hosts use `--user-only`; their package workflow stays native.
+Profiles continue after task failures but return exit status 1 and list failures.
 
 Vim and system hardening are separate choices. Recommended hardening excludes
 Quad9 DNS, USBGuard, key-only SSH and strict `/dev/shm`/kernel-module policies.
@@ -84,11 +94,12 @@ For a remote machine, keep an independent access path before changing SSH/firewa
 ## Validate changes without configuring the host
 
 ```bash
-bash tests/backup-smoke.sh
-find . -path './.git' -prune -o -type f -name '*.sh' -exec bash -n {} \;
+python3 tools/verify.py
+# CI requires the static analyzer:
+python3 tools/verify.py --require-shellcheck
 ```
 
-The regression uses temporary files only. Real package installs and hardening must
+Tests use temporary files, mocked operations and loopback HTTP only. Real package installs and hardening must
 be checked on disposable machines for each target distribution.
 
 [MIT license](LICENSE).

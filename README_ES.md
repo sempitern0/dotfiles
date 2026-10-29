@@ -5,6 +5,8 @@ y Vim opcional. Utiliza paquetes de los repositorios configurados en tu distribu
 
 [English](README.md) · **Español** · [Referencia completa](docs/REFERENCE.md)
 
+[Perfiles de escritorio, compatibilidad y errores](docs/DESKTOP.md#español) · [Validación](docs/MAINTENANCE.md)
+
 ## Primer uso
 
 Requisitos: Linux, Bash 4.3+, Git y una cuenta existente. Familias compatibles:
@@ -14,8 +16,9 @@ cuando corresponde.
 ```bash
 git clone https://github.com/sempitern0/dotfiles.git
 cd dotfiles
+./bash_setup.sh --plan
 ./bash_setup.sh --status
-./bash_setup.sh --recommended
+./bash_setup.sh --desktop     # desde la terminal del escritorio gráfico
 ```
 
 Abre una terminal nueva al terminar. Para elegir módulos, usa `./bash_setup.sh`.
@@ -26,6 +29,9 @@ su `.zshrc` y añade una línea de carga de la configuración compartida.
 
 | Comando | Alcance |
 |---|---|
+| `./bash_setup.sh --plan` | Ver grupos de paquetes y despliegue sin cambios |
+| `./bash_setup.sh --user-only` | Desplegar archivos con herramientas existentes, sin instalar paquetes |
+| `./bash_setup.sh --desktop` | Recommended más utilidades XDG/MIME y fuentes en equipos gráficos |
 | `./bash_setup.sh --status` | Diagnóstico sin instalación |
 | `./bash_setup.sh --minimal` | Paquetes básicos, shell, Git/SSH y utilidades |
 | `./bash_setup.sh --recommended` | Lo anterior + desarrollo, diagnóstico y productividad |
@@ -33,6 +39,10 @@ su `.zshrc` y añade una línea de carga de la configuración compartida.
 | `./bash_setup.sh --user alice --recommended` | Seleccionar explícitamente la cuenta destino |
 | `sudo ./hardening_setup.sh --audit` | Revisar la postura de seguridad |
 | `sudo ./hardening_setup.sh --recommended` | Aplicar el baseline de hardening por separado |
+
+El perfil de escritorio conserva tu entorno gráfico, aplicaciones predeterminadas y drivers.
+En sistemas inmutables/transaccionales usa `--user-only` y el gestor nativo del sistema.
+Los perfiles continúan tras un fallo, lo muestran y devuelven código de salida 1.
 
 Vim y hardening son decisiones independientes. El hardening recomendado excluye
 Quad9, USBGuard, SSH solo con claves y las restricciones estrictas de `/dev/shm`
@@ -75,8 +85,9 @@ conserva acceso alternativo antes de cambiar SSH, firewall o DNS.
 ## Comprobar cambios
 
 ```bash
-bash tests/backup-smoke.sh
-find . -path './.git' -prune -o -type f -name '*.sh' -exec bash -n {} \;
+python3 tools/verify.py
+# CI exige el analizador estático:
+python3 tools/verify.py --require-shellcheck
 ```
 
 La regresión solo usa archivos temporales. Valida instalaciones y hardening en
