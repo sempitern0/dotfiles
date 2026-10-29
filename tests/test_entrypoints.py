@@ -9,10 +9,10 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 class EntryPoints(unittest.TestCase):
-    def run_script(self, *args):
+    def run_script(self, *args, script="bash_setup.sh"):
         with tempfile.TemporaryDirectory() as temporary:
             state = Path(temporary) / 'state'
-            result = subprocess.run(['bash', str(ROOT / 'bash_setup.sh'), *args],
+            result = subprocess.run(['bash', str(ROOT / script), *args],
                                     capture_output=True, text=True, timeout=15,
                                     start_new_session=True,
                                     env=dict(os.environ, XDG_STATE_HOME=str(state), NO_COLOR='1'))
@@ -24,6 +24,12 @@ class EntryPoints(unittest.TestCase):
             with self.subTest(mode=mode):
                 result = self.run_script(mode)
                 self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
+    def test_hardening_rejects_ambiguous_or_detached_interactive_launch(self):
+        for args in (('--audit', '--recommended'), ('--restore',), ()):
+            with self.subTest(args=args):
+                result = self.run_script(*args, script='hardening_setup.sh')
+                self.assertEqual(result.returncode, 2, result.stdout + result.stderr)
 
     def test_invalid_modes_fail_before_state_creation(self):
         for args in (('--no-such-option',), ('--user',), ('--user=',),

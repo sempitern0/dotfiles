@@ -118,22 +118,27 @@ hardening_restore_path_from_current_snapshot() {
 
 hardening_finalize_snapshot() {
     [[ -n "${HARDENING_SNAPSHOT:-}" && -d "$HARDENING_SNAPSHOT" ]] || return 0
-    (
+    command_exists sha256sum || { msg_error "Cannot finalize recovery snapshot: sha256sum missing."; return 1; }
+    local checksums
+    checksums="$(mktemp "$HARDENING_SNAPSHOT/.SHA256SUMS.XXXXXX")" || return 1
+    if ! (
         cd "$HARDENING_SNAPSHOT" || exit 1
-        if command_exists sha256sum; then
-            find rootfs -type f -print0 2>/dev/null | sort -z | xargs -0 -r sha256sum >SHA256SUMS
-            [[ -f networkmanager-dns.env ]] && sha256sum networkmanager-dns.env >>SHA256SUMS
-        fi
-    ) || true
-    printf 'finalized=%s\n' "$(date -Is)" >>"$HARDENING_SNAPSHOT/metadata.txt"
-    chmod 0600 "$HARDENING_SNAPSHOT/metadata.txt" "$HARDENING_SNAPSHOT/paths.tsv" "$HARDENING_SNAPSHOT/services.tsv" 2>/dev/null || true
+        find rootfs -type f -print0 | sort -z | xargs -0 -r sha256sum || exit 1
+        if [[ -f networkmanager-dns.env ]]; then sha256sum networkmanager-dns.env || exit 1; fi
+    ) >"$checksums"; then
+        rm -f -- "$checksums"
+        msg_error "Recovery snapshot checksums failed; snapshot was not finalized."
+        return 1
+    fi
+    mv -f -- "$checksums" "$HARDENING_SNAPSHOT/SHA256SUMS" || { rm -f -- "$checksums"; return 1; }
+    printf 'finalized=%s\n' "$(date -Is)" >>"$HARDENING_SNAPSHOT/metadata.txt" || return 1
+    chmod 0600 "$HARDENING_SNAPSHOT/metadata.txt" "$HARDENING_SNAPSHOT/paths.tsv" "$HARDENING_SNAPSHOT/services.tsv"
 }
 
 hardening_record_service() {
     local unit="$1" enabled="not-found" active="not-found"
     hardening_snapshot_init || return 1
     [[ -z "${HARDENING_SERVICE_RECORDED[$unit]:-}" ]] || return 0
-    HARDENING_SERVICE_RECORDED[$unit]=1
 
     if service_exists "$unit"; then
         enabled="$(systemctl is-enabled "$unit" 2>/dev/null || true)"
@@ -141,14 +146,71 @@ hardening_record_service() {
         [[ -n "$enabled" ]] || enabled="disabled"
         [[ -n "$active" ]] || active="inactive"
     fi
-    printf '%s\t%s\t%s\n' "$unit" "$enabled" "$active" >>"$HARDENING_SERVICES"
+    printf '%s\t%s\t%s\n' "$unit" "$enabled" "$active" >>"$HARDENING_SERVICES" || return 1
+    HARDENING_SERVICE_RECORDED[$unit]=1
+}
+
+# Copy first, then replace on the destination filesystem. Failed copies leave
+# the current path intact; a failed final rename attempts to put it back.
+restore_snapshot_payload() {
+    local src="$1" path="$2" stage had_original=0
+    mkdir -p "$(dirname "$path")" || return 1
+    stage="$(mktemp -d "${path}.restore.XXXXXX")" || return 1
+    if ! cp -a -- "$src" "$stage/original"; then rm -rf -- "$stage"; return 1; fi
+    if [[ -e "$path" || -L "$path" ]]; then
+        if ! mv -T -- "$path" "$stage/replaced"; then rm -rf -- "$stage"; return 1; fi
+        had_original=1
+    fi
+    if ! mv -T -- "$stage/original" "$path"; then
+        if (( had_original )) && ! mv -T -- "$stage/replaced" "$path"; then
+            msg_error "Restore rollback failed; previous path preserved at $stage/replaced"
+            return 1
+        fi
+        rm -rf -- "$stage"
+        return 1
+    fi
+    rm -rf -- "$stage"
+}
+
+validate_restore_snapshot() {
+    local snap="$1" state path extra src
+    [[ -d "$snap" && -f "$snap/paths.tsv" ]] || { msg_error "Invalid snapshot: $snap"; return 1; }
+    while IFS=$'\t' read -r state path extra; do
+        [[ -n "$state$path$extra" ]] || continue
+        if [[ "$state" != PRESENT && "$state" != ABSENT ]] ||
+           [[ -n "$extra" || "$path" != /* || "$path" == / || "$path" == */ ||
+              "$path" == *//* || "$path" == */./* || "$path" == */../* || "$path" == */. || "$path" == */.. ]]; then
+            msg_error "Invalid recovery manifest entry; no paths restored."
+            return 1
+        fi
+        src="$snap/rootfs/${path#/}"
+        if [[ "$state" == PRESENT && ! -e "$src" && ! -L "$src" ]]; then
+            msg_error "Backup payload missing: $path; no paths restored."
+            return 1
+        fi
+    done <"$snap/paths.tsv"
+    if [[ -f "$snap/SHA256SUMS" ]]; then
+        command_exists sha256sum || { msg_error "sha256sum required to verify this snapshot."; return 1; }
+        if [[ -s "$snap/SHA256SUMS" ]]; then
+            (cd "$snap" && sha256sum --check --quiet SHA256SUMS) || { msg_error "Snapshot integrity check failed; no paths restored."; return 1; }
+        else
+            local payload_file
+            payload_file="$(find "$snap/rootfs" -type f -print -quit)" || return 1
+            if [[ -n "$payload_file" || -f "$snap/networkmanager-dns.env" ]]; then
+                msg_error "Empty checksum manifest for a snapshot containing files; no paths restored."
+                return 1
+            fi
+        fi
+    else
+        msg_warn "Snapshot has no checksums (possibly an interrupted run); payload presence checked, integrity unverified."
+    fi
 }
 
 restore_snapshot_dir() {
-    local snap="$1" manifest="" services="" state path rel src unit enabled active
+    local snap="$1" manifest="" services="" state path rel src unit enabled active failures=0
     manifest="$snap/paths.tsv"
     services="$snap/services.tsv"
-    [[ -d "$snap" && -f "$manifest" ]] || { msg_error "Invalid snapshot: $snap"; return 1; }
+    validate_restore_snapshot "$snap" || return 1
     confirm_literal "Restore assistant-managed paths and recorded service states from $(basename "$snap")?" "RESTORE" || return 0
 
     while IFS=$'\t' read -r state path; do
@@ -157,25 +219,31 @@ restore_snapshot_dir() {
         src="$snap/rootfs/$rel"
         case "$state" in
             PRESENT)
-                [[ -e "$src" || -L "$src" ]] || { msg_warn "Backup payload missing: $path"; continue; }
-                rm -rf -- "$path"
-                mkdir -p "$(dirname "$path")"
-                cp -a -- "$src" "$path" || msg_warn "Failed restoring $path"
+                if ! restore_snapshot_payload "$src" "$path"; then
+                    msg_error "Failed restoring $path; remaining paths were not changed."
+                    return 1
+                fi
                 ;;
-            ABSENT) rm -rf -- "$path" 2>/dev/null || true ;;
+            ABSENT) rm -rf -- "$path" || { msg_error "Failed removing $path during recovery."; return 1; } ;;
         esac
     done <"$manifest"
 
-    if [[ -f "$snap/networkmanager-dns.env" ]] && command_exists nmcli; then
-        # Root-owned file generated with printf %q by this assistant.
-        # shellcheck disable=SC1090
-        source "$snap/networkmanager-dns.env"
-        if [[ -n "${NM_UUID:-}" ]]; then
-            msg_warn "Restoring NetworkManager DNS for connection ${NM_UUID}. This can briefly interrupt connectivity."
-            nmcli connection modify "$NM_UUID" \
-                ipv4.ignore-auto-dns "${NM_V4_IGNORE:-no}" ipv4.dns "${NM_V4_DNS:-}" \
-                ipv6.ignore-auto-dns "${NM_V6_IGNORE:-no}" ipv6.dns "${NM_V6_DNS:-}" || true
-            nmcli connection up "$NM_UUID" >/dev/null 2>&1 || true
+    if [[ -f "$snap/networkmanager-dns.env" ]]; then
+        if command_exists nmcli; then
+            local NM_UUID="" NM_V4_IGNORE="" NM_V4_DNS="" NM_V6_IGNORE="" NM_V6_DNS=""
+            # Root-owned file generated with printf %q by this assistant.
+            # shellcheck disable=SC1090
+            source "$snap/networkmanager-dns.env" || return 1
+            if [[ -n "${NM_UUID:-}" ]]; then
+                msg_warn "Restoring NetworkManager DNS for connection ${NM_UUID}. This can briefly interrupt connectivity."
+                nmcli connection modify "$NM_UUID" \
+                    ipv4.ignore-auto-dns "${NM_V4_IGNORE:-no}" ipv4.dns "${NM_V4_DNS:-}" \
+                    ipv6.ignore-auto-dns "${NM_V6_IGNORE:-no}" ipv6.dns "${NM_V6_DNS:-}" || ((failures+=1))
+                nmcli connection up "$NM_UUID" >/dev/null 2>&1 || ((failures+=1))
+            fi
+        else
+            msg_error "Cannot restore recorded NetworkManager settings: nmcli unavailable."
+            ((failures+=1))
         fi
     fi
 
@@ -183,21 +251,26 @@ restore_snapshot_dir() {
         while IFS=$'\t' read -r unit enabled active; do
             service_exists "$unit" || continue
             case "$enabled" in
-                enabled|enabled-runtime|linked|linked-runtime) systemctl enable "$unit" >/dev/null 2>&1 || true ;;
-                disabled|not-found) systemctl disable "$unit" >/dev/null 2>&1 || true ;;
+                enabled|enabled-runtime|linked|linked-runtime) systemctl enable "$unit" >/dev/null 2>&1 || ((failures+=1)) ;;
+                disabled|not-found) systemctl disable "$unit" >/dev/null 2>&1 || ((failures+=1)) ;;
             esac
             case "$active" in
-                active|activating) systemctl start "$unit" >/dev/null 2>&1 || true ;;
-                inactive|failed|deactivating|not-found) systemctl stop "$unit" >/dev/null 2>&1 || true ;;
+                active|activating) systemctl start "$unit" >/dev/null 2>&1 || ((failures+=1)) ;;
+                inactive|failed|deactivating|not-found) systemctl stop "$unit" >/dev/null 2>&1 || ((failures+=1)) ;;
             esac
         done <"$services"
     fi
 
-    systemctl daemon-reload >/dev/null 2>&1 || true
-    sysctl --system >/dev/null 2>&1 || true
+    systemctl daemon-reload >/dev/null 2>&1 || ((failures+=1))
+    sysctl --system >/dev/null 2>&1 || ((failures+=1))
     for unit in ssh.service sshd.service fail2ban.service firewalld.service nftables.service systemd-resolved.service; do
-        systemctl try-reload-or-restart "$unit" >/dev/null 2>&1 || true
+        service_exists "$unit" || continue
+        systemctl try-reload-or-restart "$unit" >/dev/null 2>&1 || ((failures+=1))
     done
+    if (( failures )); then
+        msg_error "Files restored, but $failures network/service/kernel recovery action(s) failed. Keep the recovery session open."
+        return 1
+    fi
     msg_success "Snapshot restoration completed. Review networking and authentication before closing the recovery session."
 }
 
@@ -699,8 +772,10 @@ interactive_menu() {
 }
 
 main() {
-    local mode="interactive"
+    (( BASH_VERSINFO[0] > 4 || (BASH_VERSINFO[0] == 4 && BASH_VERSINFO[1] >= 3) )) || { printf 'Bash 4.3+ required.\n' >&2; return 2; }
+    local mode="interactive" previous_mode
     while (($#)); do
+        previous_mode="$mode"
         case "$1" in
             --audit) mode="audit" ;;
             --recommended) mode="recommended" ;;
@@ -710,9 +785,15 @@ main() {
             --help|-h) usage; return 0 ;;
             *) msg_error "Unknown argument: $1"; usage >&2; return 2 ;;
         esac
+        if [[ "$previous_mode" != interactive && "$previous_mode" != "$mode" ]]; then
+            msg_error "Choose one hardening mode per invocation."; return 2
+        fi
         shift
     done
 
+    if [[ "$mode" == interactive || "$mode" == restore ]] && ! ui_has_tty; then
+        msg_error "Interactive hardening/recovery requires a controlling terminal."; return 2
+    fi
     prepare_context || return 1
     if [[ "$mode" != audit ]]; then start_hardening_evidence || return 1; fi
     local rc=0

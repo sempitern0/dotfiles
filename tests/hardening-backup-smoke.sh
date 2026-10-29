@@ -28,4 +28,23 @@ hardening_backup_path "$tmp/link"
 [[ "$(readlink "$HARDENING_SNAPSHOT/rootfs/${tmp#/}/link")" == missing ]]
 hardening_backup_path "$tmp/absent"
 grep -Fq $'ABSENT\t'"$tmp/absent" "$HARDENING_MANIFEST"
+# A failed service journal write must not be marked as recorded on retry.
+services_file="$HARDENING_SERVICES"
+mkdir "$tmp/not-a-file"
+HARDENING_SERVICES="$tmp/not-a-file"
+service_exists() { return 1; }
+if hardening_record_service example.service; then exit 1; fi
+[[ -z "${HARDENING_SERVICE_RECORDED[example.service]:-}" ]]
+HARDENING_SERVICES="$services_file"
+hardening_record_service example.service
+[[ "${HARDENING_SERVICE_RECORDED[example.service]}" == 1 ]]
+# Failed checksum generation must fail finalization without publishing partial sums.
+xargs() { return 123; }
+if hardening_finalize_snapshot; then exit 1; fi
+! grep -q '^finalized=' "$HARDENING_SNAPSHOT/metadata.txt"
+[[ ! -e "$HARDENING_SNAPSHOT/SHA256SUMS" ]]
+unset -f xargs
+hardening_finalize_snapshot
+(cd "$HARDENING_SNAPSHOT" && sha256sum -c SHA256SUMS)
+grep -q '^finalized=' "$HARDENING_SNAPSHOT/metadata.txt"
 printf 'PASS: hardening snapshot partial-copy retry, originals, symlinks and absent paths\n'

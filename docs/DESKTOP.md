@@ -122,3 +122,21 @@ siguen siendo configuración personal.
 
 Referencias: [reglas de prioridad SSH](https://man.openbsd.org/ssh_config),
 [actualización completa en Arch](https://wiki.archlinux.org/title/System_maintenance#Partial_upgrades_are_unsupported).
+
+## Recovery acceptance / Aceptación de recuperación
+
+Recovery verifies existing regular-file checksums and checks payload availability
+before changing any paths. An interrupted snapshot without hashes produces an
+integrity warning and still requires literal RESTORE confirmation. File/directory
+payloads are staged before replacement; a failed rename attempts local rollback.
+A failed rollback retains the previous path in staging and reports its location.
+Network/service/kernel failures produce nonzero status. Recovery is per-path;
+an error on a later path does not undo earlier successful restorations.
+
+La recuperación verifica los hashes existentes de archivos regulares y la presencia
+de los datos antes de cambiar rutas. Un snapshot interrumpido sin hashes muestra
+un aviso y exige escribir RESTORE. Prepara copias antes de sustituir archivos o
+directorios; si falla el cambio de nombre, intenta recuperar el destino anterior.
+Si ese rollback falla, conserva el destino anterior en staging e indica la ubicación.
+Los fallos de red/servicios/kernel devuelven error. La recuperación actúa por ruta:
+un fallo posterior no revierte las rutas ya restauradas.

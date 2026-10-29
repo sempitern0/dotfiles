@@ -232,14 +232,17 @@ configure_ssh_client() {
     tmp="$(mktemp)" || return 1
     if [[ -e "$main" ]]; then
         if ! awk -v managed="$include_line" '
-            $0 == "# BEGIN DOTFILES SSH DEFAULTS" { block=1; next }
-            $0 == "# END DOTFILES SSH DEFAULTS" { block=0; next }
+            $0 == "# BEGIN DOTFILES SSH DEFAULTS" { if (block) exit 1; block=1; next }
+            $0 == "# END DOTFILES SSH DEFAULTS" { if (!block) exit 1; block=0; next }
             !block && $0 != managed { print }
+            END { if (block) exit 1 }
         ' "$main" >"$tmp"; then
-            rm -f -- "$tmp"; return 1
+            rm -f -- "$tmp"
+            msg_error "Cannot regenerate SSH defaults: read error or malformed managed block. Main config was preserved."
+            return 1
         fi
     fi
-    printf '# BEGIN DOTFILES SSH DEFAULTS\nHost *\n    %s\n# END DOTFILES SSH DEFAULTS\n' "$include_line" >>"$tmp"
+    printf '# BEGIN DOTFILES SSH DEFAULTS\nHost *\n    %s\n# END DOTFILES SSH DEFAULTS\n' "$include_line" >>"$tmp" || { rm -f -- "$tmp"; return 1; }
     copy_with_backup "$tmp" "$main" "$TARGET_USER" 0600
     local rc=$?
     rm -f -- "$tmp"

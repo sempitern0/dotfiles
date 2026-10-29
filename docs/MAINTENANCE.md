@@ -57,3 +57,26 @@ Resumen: nuevos perfiles desktop/user-only/plan; errores propagados, prioridades
 conservadas, copias de hardening recuperables tras fallos y diagnósticos HTTP/HTML
 corregidos. Las pruebas son aisladas; sigue pendiente la aceptación nativa de cada
 distribución y sus políticas de recuperación.
+
+### Final pre-merge review
+
+- Recovery now checks all manifest entries and payload presence before any path
+  changes. Existing regular-file checksums must verify; interrupted snapshots without
+  checksums remain recoverable after a visible integrity warning and RESTORE confirmation.
+- Each PRESENT payload is copied to a destination-side staging directory before the
+  original path is moved. A failed final rename attempts to restore the previous path;
+  a failed rollback preserves that previous path in staging and prints its location.
+  This is per-path protection, not an all-or-nothing transaction across the host.
+- Network/service/kernel apply failures return nonzero and report partial recovery.
+- Checksum generation failures no longer finalize snapshots. Failed service-journal
+  writes remain retryable. Empty checksum manifests are accepted only when there are
+  no regular files to hash, including service-only snapshots.
+- Malformed SSH managed markers stop regeneration while preserving the main config.
+  Hardening rejects contradictory modes and detached interactive/recovery launches
+  before elevation or runtime initialization.
+
+Resumen: restauración con prevalidación y copias preparadas antes de sustituir cada
+ruta; los errores de recuperación ya no anuncian éxito. Se conservan las recuperaciones
+interrumpidas sin hashes con aviso y confirmación. No hay una transacción global:
+si una ruta posterior falla, las anteriores pueden haberse restaurado. Las pruebas
+usan temporales y servicios simulados; la aceptación real de recuperación sigue pendiente.

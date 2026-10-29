@@ -22,6 +22,14 @@ if command -v ssh >/dev/null; then
     config="$(ssh -G -F "$tmp/ssh-config" other.test 2>/dev/null)"
     [[ "$config" == *'serveraliveinterval 60'* && "$config" != *'user personal'* ]]
 fi
+# Malformed managed markers must not delete subsequent personal SSH rules.
+for content in $'# BEGIN DOTFILES SSH DEFAULTS\nHost private.test\n    User keep' \
+               $'# END DOTFILES SSH DEFAULTS\nHost private.test\n    User keep'; do
+    printf '%s\n' "$content" >"$TARGET_HOME/.ssh/config"
+    cp "$TARGET_HOME/.ssh/config" "$tmp/broken-original"
+    if configure_ssh_client; then exit 1; fi
+    cmp "$TARGET_HOME/.ssh/config" "$tmp/broken-original"
+done
 # A directory destination must not silently receive the temporary source file.
 printf source >"$tmp/source"
 mkdir "$tmp/directory"
