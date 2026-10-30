@@ -1,7 +1,10 @@
-# dotfiles
+<p align="center"><img src="icon.svg" width="112" height="112" alt="dotfiles icon"></p>
 
-Prepara tu escritorio Linux personal: Bash/Zsh, Git, cliente SSH, comandos útiles
-y Vim opcional. Utiliza paquetes de los repositorios configurados en tu distribución.
+<h1 align="center">dotfiles</h1>
+
+<p align="center"><strong>Configuración reproducible del entorno Linux y refuerzo de seguridad.</strong></p>
+
+Prepara tu entorno Linux con Bash/Zsh, Git, SSH, comandos útiles y Vim opcional. Los paquetes proceden de los repositorios de tu distribución.
 
 [English](README.md) · **Español** · [Referencia completa](docs/REFERENCE.md)
 
