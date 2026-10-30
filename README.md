@@ -1,7 +1,10 @@
-# dotfiles
+<p align="center"><img src="icon.svg" width="112" height="112" alt="dotfiles icon"></p>
 
-Prepare a personal Linux workstation: Bash/Zsh, Git, SSH client, useful commands
-and optional Vim. Packages come from your distribution's configured repositories.
+<h1 align="center">dotfiles</h1>
+
+<p align="center"><strong>Reproducible Linux workstation setup and security hardening.</strong></p>
+
+Prepare a personal Linux workstation with Bash/Zsh, Git, SSH, useful commands and optional Vim. Packages come from your distribution's configured repositories.
 
 **English** · [Español](README_ES.md) · [Full reference](docs/REFERENCE.md)
 
