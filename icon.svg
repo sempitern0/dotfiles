@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="128" height="128" viewBox="0 0 128 128" role="img" aria-labelledby="title desc">
+  <title id="title">dotfiles</title>
+  <desc id="desc">Layered configuration files with dot-prefixed settings, symbolizing a customized developer environment.</desc>
+  <rect width="128" height="128" rx="24" fill="#191E31"/>
+  <rect x="21" y="31" width="75" height="78" rx="10" fill="#27304B" stroke="#566184" stroke-width="3"/>
+  <rect x="33" y="19" width="76" height="82" rx="10" fill="#303A58" stroke="#AA98F7" stroke-width="3.5"/>
+  <path d="M46 37h50" stroke="#53617F" stroke-width="2.5" stroke-linecap="round"/>
+  <circle cx="51" cy="53" r="5.5" fill="#C6ADFF"/>
+  <path d="M66 53h28" stroke="#E7E5FA" stroke-width="5" stroke-linecap="round"/>
+  <circle cx="51" cy="71" r="5.5" fill="#C6ADFF"/>
+  <path d="M66 71h22" stroke="#E7E5FA" stroke-width="5" stroke-linecap="round"/>
+  <circle cx="51" cy="89" r="5.5" fill="#C6ADFF"/>
+  <path d="M66 89h28" stroke="#E7E5FA" stroke-width="5" stroke-linecap="round"/>
+</svg>
